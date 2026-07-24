@@ -22,17 +22,27 @@ pnpm build:desktop
 
 Tauri builds native packages for the host platform. GitHub Actions builds release assets for each desktop platform when a `v*` tag is pushed:
 
-- macOS: `.app` and `.dmg`
+- macOS: separately signed and notarized `.app` and `.dmg` installers for Apple Silicon and Intel
 - Windows: `.msi` and `.exe` (NSIS)
 - Linux: `.AppImage` and `.deb`
 
-Unsigned builds may trigger platform security warnings. Review and sign release builds before distributing them broadly.
+Local builds are unsigned and may trigger platform security warnings. Tagged releases require Apple Developer ID signing and notarization, so distributed macOS installers open normally through Gatekeeper.
 
 ## First-launch setup and updates
 
 On a clean desktop install, the app automatically uses existing `yt-dlp` and Node installations when present. Otherwise, at first launch it installs managed copies into its Application Support directory: the official yt-dlp release binary and the latest Node LTS runtime, verified against Node's official checksum manifest. No Homebrew or manual PATH setup is required.
 
-Releases are signed and published as Tauri updater artifacts. The app checks GitHub Releases at first launch, installs a newer signed version when one is available, and restarts. Before publishing the next tag, set the GitHub Actions `TAURI_SIGNING_PRIVATE_KEY` secret to the private updater key; keep that key out of the repository permanently.
+Releases are signed and published as Tauri updater artifacts. The app checks GitHub Releases at first launch, installs a newer signed version when one is available, and restarts. The updater `.sig` assets are verification sidecars for the app and are not manual-install downloads; macOS users should download the matching `.dmg`.
+
+Before publishing a tag, set these GitHub Actions secrets:
+
+- `TAURI_SIGNING_PRIVATE_KEY`: the private updater key; keep it out of the repository permanently.
+- `APPLE_CERTIFICATE`: base64-encoded `.p12` export of a **Developer ID Application** certificate.
+- `APPLE_CERTIFICATE_PASSWORD`: password used to export that `.p12` file.
+- `APPLE_SIGNING_IDENTITY`: the complete Developer ID Application identity, including the team ID.
+- `APPLE_ID`, `APPLE_PASSWORD`, and `APPLE_TEAM_ID`: Apple ID, its app-specific password, and Apple Developer team ID used for notarization.
+
+The macOS release job stops before building when any of these secrets are unavailable, so an unsigned macOS release cannot be published by accident.
 
 ## Verify
 
