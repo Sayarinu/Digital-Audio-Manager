@@ -32,34 +32,13 @@ jobs:
         run: rustup target add ${{ matrix.target }}
       - run: pnpm install --frozen-lockfile
       - run: python -m pip install --target python/vendor -r python/requirements.txt
-      - name: Verify macOS signing secrets
-        env:
-          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
-          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
-          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
-          APPLE_ID: ${{ secrets.APPLE_ID }}
-          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
-          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-        run: |
-          test -n "$APPLE_CERTIFICATE"
-          test -n "$APPLE_CERTIFICATE_PASSWORD"
-          test -n "$APPLE_SIGNING_IDENTITY"
-          test -n "$APPLE_ID"
-          test -n "$APPLE_PASSWORD"
-          test -n "$APPLE_TEAM_ID"
       - uses: tauri-apps/tauri-action@v1
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
-          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
-          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
-          APPLE_ID: ${{ secrets.APPLE_ID }}
-          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
-          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         with:
           tagName: ${{ github.ref_name }}
           releaseName: Digital Audio Manager ${{ github.ref_name }}
-          releaseBody: Signed and notarized macOS builds for Apple Silicon and Intel, plus Windows and Linux installers.
+          releaseBody: Desktop builds for macOS, Windows, and Linux.
           releaseDraft: false
           prerelease: false
           args: --bundles app,dmg --target ${{ matrix.target }}
@@ -99,7 +78,7 @@ jobs:
         with:
           tagName: ${{ github.ref_name }}
           releaseName: Digital Audio Manager ${{ github.ref_name }}
-          releaseBody: Signed and notarized macOS builds for Apple Silicon and Intel, plus Windows and Linux installers.
+          releaseBody: Desktop builds for macOS, Windows, and Linux.
           releaseDraft: false
           prerelease: false
           args: --bundles ${{ matrix.bundles }}
