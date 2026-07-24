@@ -5,18 +5,24 @@ This process deliberately has no HTTP listener. Tauri invokes one operation at a
 time and passes a small JSON document on stdin; durable state lives in SQLite.
 """
 import hashlib
+import io
 import json
 import os
 import re
 import shutil
 import sqlite3
+import platform
 import subprocess
 import sys
+import tarfile
+import tempfile
 import time
 import uuid
+import zipfile
 from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
+from urllib.request import Request, urlopen
 
 sys.path.insert(0, str(Path(__file__).resolve().parent / "vendor"))
 try:
@@ -28,6 +34,9 @@ APP_NAME = "Digital Audio Manager"
 LEGACY_APP_NAME = "MP3 Maker"
 MAX_EXPORT_FILES = 8000
 MIN_FREE_BYTES = 20 * 1024 ** 3
+UNSORTED_COLLECTION_ID = "system:unsorted"
+NODE_INDEX_URL = "https://nodejs.org/dist/index.json"
+YTDLP_RELEASE_URL = "https://github.com/yt-dlp/yt-dlp/releases/latest/download/"
 
 
 class WorkerError(Exception):
@@ -65,6 +74,10 @@ def activity_path():
     return app_data() / "activity.json"
 
 
+def dependency_status_path():
+    return app_data() / "dependency-status.json"
+
+
 def write_activity(label, completed=0, total=0):
     app_data().mkdir(parents=True, exist_ok=True)
     activity_path().write_text(json.dumps({"label": label, "completed": completed, "total": total}))
@@ -89,7 +102,8 @@ def connect():
     con.executescript("""
       CREATE TABLE IF NOT EXISTS playlist (
         id TEXT PRIMARY KEY, title TEXT NOT NULL, source TEXT NOT NULL,
-        remote_id TEXT, loaded INTEGER NOT NULL DEFAULT 0, updated_at TEXT NOT NULL
+        remote_id TEXT, loaded INTEGER NOT NULL DEFAULT 0, updated_at TEXT NOT NULL,
+        kind TEXT NOT NULL DEFAULT 'collection'
       );
       CREATE TABLE IF NOT EXISTS track (
         video_id TEXT PRIMARY KEY, title TEXT NOT NULL, artist TEXT NOT NULL,
@@ -108,6 +122,11 @@ def connect():
       );
       CREATE TABLE IF NOT EXISTS setting (key TEXT PRIMARY KEY, value TEXT NOT NULL);
     """)
+    # Older libraries predate collection kinds. Keep every existing imported
+    # playlist intact while making room for the persistent Unsorted collection.
+    columns = {row["name"] for row in con.execute("PRAGMA table_info(playlist)")}
+    if "kind" not in columns:
+        con.execute("ALTER TABLE playlist ADD COLUMN kind TEXT NOT NULL DEFAULT 'collection'")
     return con
 
 
@@ -137,17 +156,136 @@ def find_tool(name, extra=None):
     return None
 
 
+def managed_bin_dir():
+    directory = app_data() / "bin"
+    directory.mkdir(parents=True, exist_ok=True)
+    return directory
+
+
+def managed_tool_path(name):
+    return managed_bin_dir() / (name + (".exe" if os.name == "nt" else ""))
+
+
+def host_platform():
+    system = platform.system().lower()
+    machine = platform.machine().lower()
+    normalized_system = {"darwin": "darwin", "windows": "win", "linux": "linux"}.get(system)
+    normalized_arch = "arm64" if machine in ("arm64", "aarch64") else "x64" if machine in ("x86_64", "amd64") else None
+    if not normalized_system or not normalized_arch:
+        raise WorkerError("Automatic tool setup is not supported on this platform ({} {}).".format(system, machine))
+    return normalized_system, normalized_arch
+
+
+def download_bytes(url, timeout=90):
+    request = Request(url, headers={"User-Agent": "DigitalAudioManager/0.1"})
+    with urlopen(request, timeout=timeout) as response:
+        return response.read()
+
+
+def write_managed_executable(destination, content):
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.NamedTemporaryFile(dir=destination.parent, delete=False) as handle:
+        handle.write(content)
+        temporary = Path(handle.name)
+    temporary.chmod(0o755)
+    temporary.replace(destination)
+
+
+def install_managed_ytdlp():
+    system, _arch = host_platform()
+    asset = {"darwin": "yt-dlp_macos", "linux": "yt-dlp", "win": "yt-dlp.exe"}[system]
+    destination = managed_tool_path("yt-dlp")
+    write_managed_executable(destination, download_bytes(YTDLP_RELEASE_URL + asset))
+    return str(destination)
+
+
+def node_archive_details(release, system, arch):
+    platform_name = {"darwin": "darwin", "linux": "linux", "win": "win"}[system]
+    extension = "zip" if system == "win" else "tar.gz" if system == "darwin" else "tar.xz"
+    filename = "node-{}-{}-{}.{}".format(release, platform_name, arch, extension)
+    return filename, "https://nodejs.org/dist/{}/{}".format(release, filename)
+
+
+def install_managed_node():
+    system, arch = host_platform()
+    releases = json.loads(download_bytes(NODE_INDEX_URL).decode("utf-8"))
+    release = next((item["version"] for item in releases if item.get("lts")), None)
+    if not release:
+        raise WorkerError("Node.js did not publish an LTS runtime for automatic setup.")
+    filename, archive_url = node_archive_details(release, system, arch)
+    checksums = download_bytes("https://nodejs.org/dist/{}/SHASUMS256.txt".format(release)).decode("utf-8")
+    expected = next((line.split()[0] for line in checksums.splitlines() if line.endswith("  " + filename)), None)
+    archive = download_bytes(archive_url)
+    if not expected or hashlib.sha256(archive).hexdigest().lower() != expected.lower():
+        raise WorkerError("The downloaded Node.js runtime failed its official checksum verification.")
+    binary_name = "node.exe" if system == "win" else "node"
+    if system == "win":
+        with zipfile.ZipFile(io.BytesIO(archive)) as package:
+            member = next((entry for entry in package.namelist() if entry.endswith("/" + binary_name)), None)
+            content = package.read(member) if member else None
+    else:
+        with tarfile.open(fileobj=io.BytesIO(archive), mode="r:*") as package:
+            member = next((entry for entry in package.getmembers() if entry.isfile() and entry.name.endswith("/bin/" + binary_name)), None)
+            source = package.extractfile(member) if member else None
+            content = source.read() if source else None
+    if not content:
+        raise WorkerError("The Node.js archive did not contain its runtime executable.")
+    destination = managed_tool_path("node")
+    write_managed_executable(destination, content)
+    return str(destination)
+
+
+def save_dependency_status(status):
+    app_data().mkdir(parents=True, exist_ok=True)
+    dependency_status_path().write_text(json.dumps(status))
+
+
+def read_dependency_status():
+    try:
+        return json.loads(dependency_status_path().read_text())
+    except (OSError, json.JSONDecodeError):
+        return {}
+
+
+def bootstrap_dependencies(_payload=None):
+    """Install managed downloader runtimes once for clean desktop installs."""
+    status = {}
+    for name, executable, installer in (("yt_dlp", "yt-dlp", install_managed_ytdlp), ("node", "node", install_managed_node)):
+        if find_tool(executable, [managed_tool_path(executable)]):
+            status[name] = {"state": "ready"}
+            continue
+        try:
+            installer()
+            status[name] = {"state": "ready"}
+        except Exception as exc:
+            status[name] = {"state": "failed", "detail": str(exc)[-240:]}
+    save_dependency_status(status)
+    return dashboard()
+
+
 def dependency_health():
-    managed = app_data() / "bin" / "yt-dlp"
+    managed = managed_tool_path("yt-dlp")
+    managed_node = managed_tool_path("node")
     ffmpeg = find_tool("ffmpeg", [Path("/opt/homebrew/bin/ffmpeg"), Path("/usr/local/bin/ffmpeg")])
     ffprobe = find_tool("ffprobe", [Path("/opt/homebrew/bin/ffprobe"), Path("/usr/local/bin/ffprobe")])
-    node = find_tool("node")
+    node = find_tool("node", [managed_node])
     ytdlp = find_tool("yt-dlp", [managed])
+    status = read_dependency_status()
     return {
-        "yt_dlp": {"available": bool(ytdlp), "path": ytdlp, "detail": "Anonymous downloader; no browser cookies are used."},
+        "yt_dlp": {"available": bool(ytdlp), "path": ytdlp, "detail": status.get("yt_dlp", {}).get("detail") or "Managed automatically for anonymous downloads; no browser cookies are used."},
         "ffmpeg": {"available": bool(ffmpeg and ffprobe), "path": ffmpeg, "detail": "Used for verified MP3 fallback and device copy tags."},
-        "node": {"available": bool(node), "path": node, "detail": "Optional helper dependency for yt-dlp proof-of-origin support."},
+        "node": {"available": bool(node), "path": node, "detail": status.get("node", {}).get("detail") or "Managed automatically for yt-dlp proof-of-origin support."},
     }
+
+
+def ytdlp_command(arguments):
+    """Run yt-dlp with the managed Node runtime when it is available."""
+    deps = dependency_health()
+    ytdlp = deps["yt_dlp"].get("path")
+    if not ytdlp:
+        raise WorkerError("yt-dlp is still being set up. Check Settings and retry shortly.")
+    node = deps["node"].get("path")
+    return [ytdlp, *( ["--js-runtimes", "node:" + node] if node else [] ), *arguments]
 
 
 def health_check(_payload=None):
@@ -169,13 +307,13 @@ def dashboard(_payload=None):
     con = connect()
     try:
         playlists = [dict(row) for row in con.execute("""
-          SELECT p.id, p.title, p.source, p.loaded, p.updated_at, COUNT(i.video_id) AS track_count
+          SELECT p.id, p.title, p.source, p.loaded, p.updated_at, p.kind, COUNT(i.video_id) AS track_count
           FROM playlist p LEFT JOIN playlist_item i ON p.id = i.playlist_id
-          GROUP BY p.id ORDER BY p.updated_at DESC, p.title COLLATE NOCASE
+          GROUP BY p.id ORDER BY CASE p.kind WHEN 'unsorted' THEN 0 ELSE 1 END, p.updated_at DESC, p.title COLLATE NOCASE
         """)]
         tracks = [dict(row) for row in con.execute("""
           SELECT p.id || ':' || i.position AS id, p.id AS playlist_id, i.position, t.video_id,
-                 t.title, t.artist, p.title AS album, t.duration, t.artwork_url,
+                 t.title, t.artist, CASE WHEN p.kind='unsorted' THEN t.album ELSE p.title END AS album, t.duration, t.artwork_url,
                  CASE WHEN t.local_status='failed' AND t.video_id LIKE 'unavailable:%' THEN 'unavailable' ELSE t.local_status END AS local_status,
                  t.media_path
           FROM playlist_item i JOIN playlist p ON p.id=i.playlist_id JOIN track t ON t.video_id=i.video_id
@@ -185,8 +323,9 @@ def dashboard(_payload=None):
           SELECT j.id, j.video_id, t.title, t.artist, j.state, j.attempts, j.error_code,
                  j.error_message, j.updated_at
           FROM download_job j JOIN track t ON t.video_id = j.video_id
+          WHERE j.state NOT IN ('completed', 'cancelled')
           ORDER BY CASE j.state WHEN 'running' THEN 0 WHEN 'queued' THEN 1 WHEN 'retry' THEN 2 WHEN 'failed' THEN 3 ELSE 4 END,
-                   j.updated_at DESC LIMIT 100
+                   j.updated_at DESC
         """)]
         profile = con.execute("SELECT value FROM setting WHERE key='public_profile_url'").fetchone()
         sync_notice = con.execute("SELECT value FROM setting WHERE key='last_sync_notice'").fetchone()
@@ -208,6 +347,24 @@ def require_url_playlist(url):
     return playlist_id
 
 
+def require_import_source(url):
+    """Return a supported public import source: a playlist or Music album."""
+    parsed = urlparse(url.strip())
+    host = parsed.netloc.lower().split(":")[0]
+    if parsed.scheme not in ("https", "http") or host not in ("youtube.com", "www.youtube.com", "music.youtube.com", "m.youtube.com"):
+        raise WorkerError("Use a public YouTube Music playlist or album URL.")
+    playlist_id = parse_qs(parsed.query).get("list", [None])[0]
+    if playlist_id:
+        return "playlist", playlist_id
+    browse_id = parse_qs(parsed.query).get("browseId", [None])[0]
+    if not browse_id and host == "music.youtube.com":
+        match = re.fullmatch(r"/browse/([^/]+)", parsed.path.rstrip("/"))
+        browse_id = match.group(1) if match else None
+    if browse_id:
+        return "album", browse_id
+    raise WorkerError("Use a public YouTube Music playlist or album URL.")
+
+
 def require_public_profile_url(url):
     parsed = urlparse(url.strip())
     host = parsed.netloc.lower().split(":")[0]
@@ -220,10 +377,7 @@ def require_public_profile_url(url):
 
 
 def ytdlp_public_json(url, timeout=300):
-    ytdlp = dependency_health()["yt_dlp"].get("path")
-    if not ytdlp:
-        raise WorkerError("yt-dlp is required for anonymous public-profile imports. Install it, then retry.")
-    result = subprocess.run([ytdlp, "--no-warnings", "--flat-playlist", "--dump-single-json", url], capture_output=True, text=True, timeout=timeout)
+    result = subprocess.run(ytdlp_command(["--no-warnings", "--flat-playlist", "--dump-single-json", url]), capture_output=True, text=True, timeout=timeout)
     if result.returncode:
         raise WorkerError("Could not read that public profile: " + (result.stderr.strip() or result.stdout.strip() or "yt-dlp failed"))
     lines = [line for line in result.stdout.splitlines() if line.strip()]
@@ -237,10 +391,7 @@ def ytdlp_public_json(url, timeout=300):
 
 def ytdlp_public_entries(url, timeout=900):
     """Read every playlist entry as its own JSON line, including continuations."""
-    ytdlp = dependency_health()["yt_dlp"].get("path")
-    if not ytdlp:
-        raise WorkerError("yt-dlp is required for anonymous public-playlist imports. Install it, then retry.")
-    result = subprocess.run([ytdlp, "--no-warnings", "--flat-playlist", "--dump-json", url], capture_output=True, text=True, timeout=timeout)
+    result = subprocess.run(ytdlp_command(["--no-warnings", "--flat-playlist", "--dump-json", url]), capture_output=True, text=True, timeout=timeout)
     if result.returncode:
         raise WorkerError("Could not read that public playlist: " + (result.stderr.strip() or result.stdout.strip() or "yt-dlp failed"))
     entries = []
@@ -392,6 +543,130 @@ def import_playlist_url(payload):
     return dashboard()
 
 
+def ensure_unsorted_collection(con):
+    now = utcnow()
+    con.execute("""INSERT INTO playlist (id, title, source, remote_id, loaded, updated_at, kind)
+                   VALUES (?, 'Unsorted', 'Quick import', NULL, 0, ?, 'unsorted')
+                   ON CONFLICT(id) DO UPDATE SET title=excluded.title, source=excluded.source,
+                   kind='unsorted', updated_at=excluded.updated_at""", (UNSORTED_COLLECTION_ID, now))
+
+
+def queue_video_ids(con, video_ids, missing_only=True):
+    """Queue known, playable tracks once and return the number newly queued."""
+    queued, now = 0, utcnow()
+    for video_id in dict.fromkeys(video_ids):
+        track = con.execute("SELECT local_status FROM track WHERE video_id=?", (video_id,)).fetchone()
+        if not track or track["local_status"] == "unavailable" or video_id.startswith("unavailable:"):
+            continue
+        if missing_only and track["local_status"] == "ready":
+            continue
+        present = con.execute("SELECT id FROM download_job WHERE video_id=? AND state IN ('queued','running','retry')", (video_id,)).fetchone()
+        if present:
+            continue
+        con.execute("INSERT INTO download_job (id, video_id, state, created_at, updated_at) VALUES (?, ?, 'queued', ?, ?)",
+                    (str(uuid.uuid4()), video_id, now, now))
+        con.execute("UPDATE track SET local_status='queued', updated_at=? WHERE video_id=?", (now, video_id))
+        queued += 1
+    return queued
+
+
+def add_unsorted_entries(con, entries, album_title=None, artwork_url=None):
+    """Append playable public entries to Unsorted without duplicating video IDs."""
+    ensure_unsorted_collection(con)
+    next_position = con.execute("SELECT COALESCE(MAX(position), 0) + 1 FROM playlist_item WHERE playlist_id=?", (UNSORTED_COLLECTION_ID,)).fetchone()[0]
+    existing = {row["video_id"] for row in con.execute("SELECT video_id FROM playlist_item WHERE playlist_id=?", (UNSORTED_COLLECTION_ID,))}
+    added = []
+    now = utcnow()
+    for item in entries or []:
+        video_id = item.get("videoId") or item.get("id")
+        if not video_id or video_id in existing:
+            continue
+        thumbnails = item.get("thumbnails") or []
+        item_artwork = thumbnails[-1].get("url") if thumbnails else item.get("thumbnail")
+        title = item.get("title") or "Untitled track"
+        artist = artist_from_metadata(item)
+        duration = item.get("duration")
+        if not isinstance(duration, str) or not re.fullmatch(r"\d+:\d{2}(?::\d{2})?", duration):
+            duration = human_duration(duration)
+        con.execute("""INSERT INTO track (video_id, title, artist, album, duration, artwork_url, local_status, updated_at)
+                       VALUES (?, ?, ?, ?, ?, ?, 'missing', ?)
+                       ON CONFLICT(video_id) DO UPDATE SET title=excluded.title, artist=excluded.artist,
+                       album=COALESCE(excluded.album, track.album), duration=COALESCE(excluded.duration, track.duration),
+                       artwork_url=COALESCE(excluded.artwork_url, track.artwork_url), updated_at=excluded.updated_at""",
+                    (video_id, title, artist, album_title or item.get("album"), duration, item_artwork or artwork_url, now))
+        con.execute("INSERT INTO playlist_item (playlist_id, position, video_id) VALUES (?, ?, ?)",
+                    (UNSORTED_COLLECTION_ID, next_position, video_id))
+        existing.add(video_id)
+        added.append(video_id)
+        next_position += 1
+    if added:
+        con.execute("UPDATE playlist SET updated_at=? WHERE id=?", (now, UNSORTED_COLLECTION_ID))
+    return added
+
+
+def import_to_unsorted(payload):
+    source_kind, source_id = require_import_source(str(payload.get("url", "")))
+    entries, album_title, artwork = [], None, None
+    if source_kind == "playlist":
+        playlist_url = "https://www.youtube.com/playlist?list=" + source_id
+        music_payload = None
+        if YTMusic:
+            try:
+                music_payload = YTMusic().get_playlist(source_id, limit=None)
+            except Exception:
+                music_payload = None
+        if music_payload:
+            entries = music_payload.get("tracks") or []
+            album_title = music_payload.get("title")
+            thumbs = music_payload.get("thumbnails") or []
+            artwork = thumbs[-1].get("url") if thumbs else None
+        else:
+            metadata = ytdlp_public_json(playlist_url)
+            entries = ytdlp_public_entries(playlist_url)
+            album_title = metadata.get("title")
+            artwork = metadata.get("thumbnail")
+    else:
+        if not YTMusic:
+            raise WorkerError("Album import requires the bundled YouTube Music metadata provider.")
+        try:
+            album = YTMusic().get_album(source_id)
+        except Exception as exc:
+            raise WorkerError("Could not read that public YouTube Music album: " + str(exc))
+        entries = album.get("tracks") or []
+        album_title = album.get("title") or "Imported album"
+        thumbs = album.get("thumbnails") or []
+        artwork = thumbs[-1].get("url") if thumbs else None
+    if not entries:
+        raise WorkerError("That public source did not expose any playable tracks.")
+    con = connect()
+    try:
+        added = add_unsorted_entries(con, entries, album_title, artwork)
+        if payload.get("queue", True):
+            queue_video_ids(con, added)
+        con.commit()
+    finally:
+        con.close()
+    return dashboard()
+
+
+def delete_library_collection(payload):
+    collection_id = str(payload.get("collection_id", ""))
+    if collection_id == UNSORTED_COLLECTION_ID:
+        raise WorkerError("Unsorted is a protected system collection and cannot be removed.")
+    con = connect()
+    try:
+        collection = con.execute("SELECT kind FROM playlist WHERE id=?", (collection_id,)).fetchone()
+        if not collection:
+            raise WorkerError("Library collection was not found.")
+        if collection["kind"] != "collection":
+            raise WorkerError("This library collection cannot be removed.")
+        con.execute("DELETE FROM playlist WHERE id=?", (collection_id,))
+        con.commit()
+    finally:
+        con.close()
+    return dashboard()
+
+
 def seed_demo(_payload=None):
     con = connect()
     try:
@@ -456,16 +731,7 @@ def queue_playlist(payload):
                                 WHERE i.playlist_id=? ORDER BY i.position""", (playlist_id,)).fetchall()
         if not tracks:
             raise WorkerError("This playlist has no local items yet. Refresh the public profile first.")
-        now = utcnow()
-        for track in tracks:
-            if track["local_status"] == "unavailable" or track["video_id"].startswith("unavailable:"):
-                continue
-            if missing_only and track["local_status"] == "ready":
-                continue
-            present = con.execute("SELECT id FROM download_job WHERE video_id=? AND state IN ('queued','running','retry')", (track["video_id"],)).fetchone()
-            if not present:
-                con.execute("INSERT INTO download_job (id, video_id, state, created_at, updated_at) VALUES (?, ?, 'queued', ?, ?)", (str(uuid.uuid4()), track["video_id"], now, now))
-                con.execute("UPDATE track SET local_status='queued', updated_at=? WHERE video_id=?", (now, track["video_id"]))
+        queue_video_ids(con, [track["video_id"] for track in tracks], missing_only)
         con.commit()
     finally:
         con.close()
@@ -511,11 +777,8 @@ def resolved_track_metadata(track, info):
 
 
 def exact_video_info(video_id):
-    ytdlp = dependency_health()["yt_dlp"].get("path")
-    if not ytdlp:
-        raise WorkerError("yt-dlp is required to resolve library metadata.")
-    result = subprocess.run([ytdlp, "--no-playlist", "--skip-download", "--no-warnings", "--print-json",
-                             "https://www.youtube.com/watch?v=" + video_id], capture_output=True, text=True, timeout=180)
+    result = subprocess.run(ytdlp_command(["--no-playlist", "--skip-download", "--no-warnings", "--print-json",
+                                            "https://www.youtube.com/watch?v=" + video_id]), capture_output=True, text=True, timeout=180)
     if result.returncode:
         raise WorkerError(result.stderr.strip() or "Could not resolve exact video metadata.")
     lines = [line for line in result.stdout.splitlines() if line.strip()]
@@ -559,19 +822,18 @@ def prepare_artwork(work, ffmpeg):
 def run_download(track):
     storage_guard()
     deps = dependency_health()
-    ytdlp = deps["yt_dlp"].get("path")
-    if not ytdlp:
-        raise WorkerError("yt-dlp is not installed. Add it to Digital Audio Manager's managed bin folder or your PATH, then retry.")
+    if not deps["yt_dlp"].get("path"):
+        raise WorkerError("yt-dlp is still being set up. Check Settings and retry shortly.")
     work = app_data() / "downloads" / track["video_id"]
     work.mkdir(parents=True, exist_ok=True)
     template = str(work / "source.%(ext)s")
     url = "https://www.youtube.com/watch?v=" + track["video_id"]
-    command = [
-        ytdlp, "--no-playlist", "--continue", "--retries", "3", "--fragment-retries", "3",
+    command = ytdlp_command([
+        "--no-playlist", "--continue", "--retries", "3", "--fragment-retries", "3",
         "--sleep-interval", "1", "--max-sleep-interval", "4", "--no-warnings", "--print-json", "--embed-metadata",
         "--write-thumbnail", "--convert-thumbnails", "jpg",
         "-f", "bestaudio[ext=m4a]/bestaudio", "-o", template, url,
-    ]
+    ])
     result = subprocess.run(command, capture_output=True, text=True, timeout=1800)
     if result.returncode != 0:
         raise WorkerError(result.stderr or result.stdout)
@@ -732,6 +994,9 @@ def set_loaded_playlist(payload):
     playlist_id = str(payload.get("playlist_id", ""))
     con = connect()
     try:
+        collection = con.execute("SELECT kind FROM playlist WHERE id=?", (playlist_id,)).fetchone()
+        if collection and collection["kind"] == "unsorted":
+            raise WorkerError("Unsorted is not a device playlist.")
         cursor = con.execute("UPDATE playlist SET loaded=?, updated_at=? WHERE id=?", (1 if payload.get("loaded") else 0, utcnow(), playlist_id))
         if cursor.rowcount != 1:
             raise WorkerError("Playlist was not found.")
@@ -744,7 +1009,7 @@ def set_loaded_playlist(payload):
 def desired_export(con):
     rows = con.execute("""SELECT p.id playlist_id, p.title playlist_title, i.position, t.video_id, t.title, t.artist,
                                 t.media_path, t.checksum FROM playlist p JOIN playlist_item i ON i.playlist_id=p.id
-                         JOIN track t ON t.video_id=i.video_id WHERE p.loaded=1 ORDER BY p.title COLLATE NOCASE, i.position""").fetchall()
+                         JOIN track t ON t.video_id=i.video_id WHERE p.loaded=1 AND p.kind!='unsorted' ORDER BY p.title COLLATE NOCASE, i.position""").fetchall()
     desired, warnings = [], []
     for row in rows:
         if not row["media_path"] or not Path(row["media_path"]).is_file():
@@ -857,11 +1122,11 @@ def sync_apply(payload):
     return sync_preview(payload)
 
 
-OPERATIONS = {"dashboard": dashboard, "health_check": health_check, "import_public_profile": import_public_profile,
-              "import_playlist_url": import_playlist_url,
+OPERATIONS = {"dashboard": dashboard, "health_check": health_check, "bootstrap_dependencies": bootstrap_dependencies, "import_public_profile": import_public_profile,
+              "import_playlist_url": import_playlist_url, "import_to_unsorted": import_to_unsorted,
               "seed_demo": seed_demo, "queue_track": queue_track, "queue_playlist": queue_playlist,
               "run_queue": run_queue, "repair_library_metadata": repair_library_metadata, "reset_and_resync_library": reset_and_resync_library,
-              "cancel_job": cancel_job, "retry_job": retry_job,
+              "cancel_job": cancel_job, "retry_job": retry_job, "delete_library_collection": delete_library_collection,
               "set_loaded_playlist": set_loaded_playlist, "sync_preview": sync_preview, "sync_apply": sync_apply,
               "sync_status": sync_status}
 

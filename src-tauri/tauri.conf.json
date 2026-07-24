@@ -1,7 +1,7 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "Digital Audio Manager",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "identifier": "com.digitalaudiomanager",
   "build": {
     "beforeDevCommand": "pnpm dev",
@@ -15,8 +15,15 @@
   },
   "bundle": {
     "active": true,
+    "createUpdaterArtifacts": true,
     "targets": "app",
     "icon": ["icons/32x32.png", "icons/128x128.png", "icons/128x128@2x.png", "icons/icon.icns", "icons/icon.ico"],
     "resources": ["../python/worker.py", "../python/vendor"]
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDZGRDE5RTQ1RjBCQjJGMTAKUldRUUw3dndSWjdSYjRvZDVBdTE4RjV3d3cvcnNlRG5jRm95SEF6dlg1ckVkeWFpQVpjY3pPc3oK",
+      "endpoints": ["https://github.com/Sayarinu/Digitial-Audio-Manager/releases/latest/download/latest.json"]
+    }
   }
 }
