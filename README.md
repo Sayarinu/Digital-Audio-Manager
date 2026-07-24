@@ -28,15 +28,14 @@ Tauri builds native packages for the host platform. GitHub Actions builds releas
 
 Local builds are unsigned and may trigger platform security warnings. Tagged releases require Apple Developer ID signing and notarization, so distributed macOS installers open normally through Gatekeeper.
 
-## First-launch setup and updates
+## First-launch setup and manual updates
 
 On a clean desktop install, the app automatically uses existing `yt-dlp` and Node installations when present. Otherwise, at first launch it installs managed copies into its Application Support directory: the official yt-dlp release binary and the latest Node LTS runtime, verified against Node's official checksum manifest. No Homebrew or manual PATH setup is required.
 
-Releases are signed and published as Tauri updater artifacts. The app checks GitHub Releases at first launch, installs a newer signed version when one is available, and restarts. The updater `.sig` assets are verification sidecars for the app and are not manual-install downloads; macOS users should download the matching `.dmg`.
+The app does not check for or install updates automatically. To update, download the newest installer from GitHub Releases and install it over the existing app. Releases contain only normal platform installers; no updater `.sig` assets are published.
 
 Before publishing a tag, set these GitHub Actions secrets:
 
-- `TAURI_SIGNING_PRIVATE_KEY`: the private updater key; keep it out of the repository permanently.
 - `APPLE_CERTIFICATE`: base64-encoded `.p12` export of a **Developer ID Application** certificate.
 - `APPLE_CERTIFICATE_PASSWORD`: password used to export that `.p12` file.
 - `APPLE_SIGNING_IDENTITY`: the complete Developer ID Application identity, including the team ID.

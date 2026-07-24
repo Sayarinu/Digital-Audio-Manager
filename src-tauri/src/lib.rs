@@ -5,23 +5,8 @@ use std::{
     sync::atomic::{AtomicBool, Ordering},
 };
 use tauri::Manager;
-use tauri_plugin_updater::UpdaterExt;
 
 static QUEUE_RUNNING: AtomicBool = AtomicBool::new(false);
-
-async fn install_available_update(app: tauri::AppHandle) {
-    let Ok(updater) = app.updater() else {
-        return;
-    };
-    let Ok(Some(update)) = updater.check().await else {
-        return;
-    };
-    if let Err(error) = update.download_and_install(|_, _| {}, || {}).await {
-        eprintln!("Digital Audio Manager update failed: {error}");
-        return;
-    }
-    app.restart();
-}
 
 fn worker_path(app: &tauri::AppHandle) -> Result<PathBuf, String> {
     let development_path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../python/worker.py");
@@ -110,14 +95,6 @@ fn open_library(app: tauri::AppHandle) -> Result<Value, String> {
 
 pub fn run() {
     tauri::Builder::default()
-        .plugin(tauri_plugin_updater::Builder::new().build())
-        .setup(|app| {
-            let updater_app = app.handle().clone();
-            tauri::async_runtime::spawn(async move {
-                install_available_update(updater_app).await;
-            });
-            Ok(())
-        })
         .invoke_handler(tauri::generate_handler![worker_command, start_queue, open_library])
         .run(tauri::generate_context!())
         .expect("error while running Digital Audio Manager");
