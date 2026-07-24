@@ -22,11 +22,11 @@ pnpm build:desktop
 
 Tauri builds native packages for the host platform. GitHub Actions builds release assets for each desktop platform when a `v*` tag is pushed:
 
-- macOS: separately signed and notarized `.app` and `.dmg` installers for Apple Silicon and Intel
+- macOS: separate `.app` and `.dmg` installers for Apple Silicon and Intel
 - Windows: `.msi` and `.exe` (NSIS)
 - Linux: `.AppImage` and `.deb`
 
-Local builds are unsigned and may trigger platform security warnings. Tagged releases require Apple Developer ID signing and notarization, so distributed macOS installers open normally through Gatekeeper.
+macOS installers are unsigned and may trigger a Gatekeeper warning. Download them only from the project’s GitHub Releases page.
 
 ## First-launch setup and manual updates
 
@@ -34,14 +34,7 @@ On a clean desktop install, the app automatically uses existing `yt-dlp` and Nod
 
 The app does not check for or install updates automatically. To update, download the newest installer from GitHub Releases and install it over the existing app. Releases contain only normal platform installers; no updater `.sig` assets are published.
 
-Before publishing a tag, set these GitHub Actions secrets:
-
-- `APPLE_CERTIFICATE`: base64-encoded `.p12` export of a **Developer ID Application** certificate.
-- `APPLE_CERTIFICATE_PASSWORD`: password used to export that `.p12` file.
-- `APPLE_SIGNING_IDENTITY`: the complete Developer ID Application identity, including the team ID.
-- `APPLE_ID`, `APPLE_PASSWORD`, and `APPLE_TEAM_ID`: Apple ID, its app-specific password, and Apple Developer team ID used for notarization.
-
-The macOS release job stops before building when any of these secrets are unavailable, so an unsigned macOS release cannot be published by accident.
+No Apple signing, notarization, or updater secrets are required to publish a release.
 
 ## Verify
 

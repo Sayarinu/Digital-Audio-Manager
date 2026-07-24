@@ -1,6 +1,6 @@
 [package]
 name = "digital-audio-manager"
-version = "1.0.0"
+version = "1.0.1"
 description = "Local music library and device sync tool"
 authors = ["Carter"]
 edition = "2021"
