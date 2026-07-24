@@ -28,6 +28,12 @@ Tauri builds native packages for the host platform. GitHub Actions builds releas
 
 Unsigned builds may trigger platform security warnings. Review and sign release builds before distributing them broadly.
 
+## First-launch setup and updates
+
+On a clean desktop install, the app automatically uses existing `yt-dlp` and Node installations when present. Otherwise, at first launch it installs managed copies into its Application Support directory: the official yt-dlp release binary and the latest Node LTS runtime, verified against Node's official checksum manifest. No Homebrew or manual PATH setup is required.
+
+Releases are signed and published as Tauri updater artifacts. The app checks GitHub Releases at first launch, installs a newer signed version when one is available, and restarts. Before publishing the next tag, set the GitHub Actions `TAURI_SIGNING_PRIVATE_KEY` secret to the private updater key; keep that key out of the repository permanently.
+
 ## Verify
 
 ```sh

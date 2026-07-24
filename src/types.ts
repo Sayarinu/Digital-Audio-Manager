@@ -16,6 +16,7 @@ export type Playlist = {
   id: string;
   title: string;
   source: string;
+  kind: 'collection' | 'unsorted';
   track_count: number;
   loaded: boolean;
   updated_at: string;
