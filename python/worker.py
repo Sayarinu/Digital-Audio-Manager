@@ -513,6 +513,7 @@ def import_public_profile(payload):
         con.execute("INSERT INTO setting (key,value) VALUES ('public_profile_url',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value", (original_url,))
         con.execute("INSERT INTO setting (key,value) VALUES ('last_sync_notice',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
                     ("Skipped {} unreadable playlist{} during sync.".format(len(skipped), "s" if len(skipped) != 1 else "") if skipped else "",))
+        con.commit()
     finally:
         con.close()
         clear_activity()
