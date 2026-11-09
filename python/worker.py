@@ -2,7 +2,8 @@
 """Local JSON worker for Digital Audio Manager.
 
 This process deliberately has no HTTP listener. Tauri invokes one operation at a
-time and passes a small JSON document on stdin; durable state lives in SQLite.
+time and passes a small JSON request in the MP3_MAKER_REQUEST environment
+variable (stdin is accepted when it is unset); durable state lives in SQLite.
 """
 import hashlib
 import io
@@ -296,11 +297,6 @@ def health_check(_payload=None):
         "app_data": str(app_data()), "library_root": str(root), "free_bytes": usage.free,
         "minimum_free_bytes": max(MIN_FREE_BYTES, int(usage.total * .10)), "dependencies": dependency_health(),
     }
-
-
-def local_status(con, video_id):
-    row = con.execute("SELECT local_status FROM track WHERE video_id = ?", (video_id,)).fetchone()
-    return row["local_status"] if row else "missing"
 
 
 def dashboard(_payload=None):
@@ -710,14 +706,8 @@ def queue_track(payload):
             raise WorkerError("This exact video is no longer in the local catalog.")
         if track["local_status"] == "unavailable" or video_id.startswith("unavailable:"):
             raise WorkerError("This public playlist entry has no playable video ID.")
-        if track["local_status"] == "ready":
-            return dashboard()
-        outstanding = con.execute("SELECT id FROM download_job WHERE video_id=? AND state IN ('queued','running','retry')", (video_id,)).fetchone()
-        if not outstanding:
-            now = utcnow()
-            con.execute("INSERT INTO download_job (id, video_id, state, created_at, updated_at) VALUES (?, ?, 'queued', ?, ?)", (str(uuid.uuid4()), video_id, now, now))
-            con.execute("UPDATE track SET local_status='queued', updated_at=? WHERE video_id=?", (now, video_id))
-            con.commit()
+        queue_video_ids(con, [video_id])
+        con.commit()
     finally:
         con.close()
     return dashboard()
@@ -1050,8 +1040,6 @@ def sync_preview(payload):
     removals = [entry for entry in old.get("entries", []) if entry.get("relative") not in wanted_paths]
     if not mount.is_dir():
         warnings.insert(0, "{} is not mounted. Preview is estimated; sync will remain disabled until it is available.".format(mount))
-    if len(desired) > MAX_EXPORT_FILES:
-        pass
     duplicates = len(desired) - len({entry["checksum"] for entry in desired})
     return {"device": mount.name or "Selected volume", "managed_root": str(root), "files_to_copy": len(additions), "files_to_remove": len(removals),
             "projected_bytes": sum(Path(entry["source"]).stat().st_size for entry in additions),
