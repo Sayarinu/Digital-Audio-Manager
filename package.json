@@ -3,6 +3,12 @@
   "private": true,
   "version": "1.0.1",
   "type": "module",
+  "license": "MIT",
+  "author": "Carter Garcia",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Sayarinu/Digital-Audio-Manager.git"
+  },
   "scripts": {
     "dev": "vite --host 127.0.0.1",
     "build": "tsc --noEmit && vite build",

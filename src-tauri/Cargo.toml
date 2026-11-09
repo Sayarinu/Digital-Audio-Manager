@@ -2,7 +2,9 @@
 name = "digital-audio-manager"
 version = "1.0.1"
 description = "Local music library and device sync tool"
-authors = ["Carter"]
+authors = ["Carter Garcia"]
+license = "MIT"
+repository = "https://github.com/Sayarinu/Digital-Audio-Manager"
 edition = "2021"
 
 [lib]
