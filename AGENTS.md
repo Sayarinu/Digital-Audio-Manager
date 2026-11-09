@@ -47,10 +47,9 @@ Run the Python tests, the UI build and `cargo check` before opening a PR. CI onl
 
 ## Branches, commits and pull requests
 
-- Maintainers track work in Linear. Every change needs its issue first, and the branch name is exactly the issue ID (for example `LUNE-574`).
-- Contributors without Linear access open a GitHub issue first and use `GH-<issue number>` (for example `GH-12`) wherever a LUNE ID appears below.
+- Every change needs an issue in your tracker first. The branch name is exactly its key, such as `ABC-123`.
 - Branch from `main`, one issue per branch and one PR per issue, targeting `main`.
-- Commit subjects are `LUNE-XXX - Change-specific message`: imperative, describing that commit's change rather than repeating the issue title.
+- Commit subjects are `ABC-123 - Change-specific message`: imperative, describing that commit's change rather than repeating the issue title.
 - Commit with your GitHub noreply email address, never a personal one. Check `git config user.email` in each new clone.
 - Do not add AI tool attribution anywhere: no `Co-Authored-By` trailers, "Generated with" lines or tool mentions in commits, PR descriptions, code, comments or docs.
 - PRs are merged with a merge commit (not squash or rebase) once the checks above pass and review is resolved.
