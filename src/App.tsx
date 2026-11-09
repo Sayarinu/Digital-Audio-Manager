@@ -95,7 +95,7 @@ export default function App() {
     let tracks = data?.tracks ?? [];
     if (view === 'library') tracks = tracks.filter((track) => track.playlist_id === activePlaylist?.id);
     return tracks.filter((track) => `${track.title} ${track.artist} ${track.album ?? ''}`.toLowerCase().includes(search.toLowerCase()));
-  }, [data, view, search, activePlaylist?.id, queueJobs]);
+  }, [data, view, search, activePlaylist?.id]);
   const activeTrack = view === 'library' ? selectedTrack ?? displayTracks[0] : undefined;
   const visibleTracks = displayTracks.slice(0, trackLimit);
   const queueCount = activeQueueCount;

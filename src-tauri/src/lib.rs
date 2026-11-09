@@ -24,21 +24,32 @@ fn worker_path(app: &tauri::AppHandle) -> Result<PathBuf, String> {
     Ok(resources.join("worker.py"))
 }
 
+/// Desktop apps launched from Finder do not inherit the shell PATH, so check the
+/// usual absolute install locations first, then fall back to a PATH lookup
+/// (the only option on Windows, where none of these paths exist).
+fn python_executable() -> &'static str {
+    for candidate in ["/opt/homebrew/bin/python3", "/usr/local/bin/python3", "/usr/bin/python3"] {
+        if PathBuf::from(candidate).is_file() {
+            return candidate;
+        }
+    }
+    if cfg!(target_os = "windows") { "python" } else { "python3" }
+}
+
 fn run_worker_command(app: tauri::AppHandle, method: String, payload: Value) -> Result<Value, String> {
     let worker = worker_path(&app)?;
     if !worker.is_file() {
         return Err(format!("Digital Audio Manager worker was not found at {}", worker.display()));
     }
     let input = serde_json::to_string(&json!({ "method": method, "payload": payload })).map_err(|error| error.to_string())?;
-    // The worker consumes a single JSON request. Supplying it through stdin keeps
-    // user data out of process arguments and avoids a network surface.
-    let python = if PathBuf::from("/opt/homebrew/bin/python3").is_file() { "/opt/homebrew/bin/python3" } else { "/usr/bin/python3" };
-    let child = Command::new(python)
+    // The worker consumes a single JSON request. Passing it through an
+    // environment variable keeps user data out of process arguments and avoids
+    // a network surface.
+    let output = Command::new(python_executable())
         .arg(worker)
         .env("MP3_MAKER_REQUEST", input)
         .output()
         .map_err(|error| format!("Could not launch local worker: {error}"))?;
-    let output = child;
     let response: Value = serde_json::from_slice(&output.stdout)
         .map_err(|error| format!("Worker returned invalid JSON ({error}): {}", String::from_utf8_lossy(&output.stderr)))?;
     if response.get("ok").and_then(Value::as_bool) == Some(true) {

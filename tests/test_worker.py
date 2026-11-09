@@ -110,6 +110,20 @@ class WorkerTests(unittest.TestCase):
         self.assertEqual(next(item for item in second["playlists"] if item["id"] == worker.UNSORTED_COLLECTION_ID)["track_count"], 2)
         self.assertEqual(len(second["jobs"]), 2)
 
+    def test_profile_sync_saves_profile_url_and_skip_notice(self):
+        profile = {"entries": [{"id": "PLgood", "title": "Good"}, {"id": "PLbad", "title": "Bad"}]}
+
+        def refresh(con, url, title_hint=None):
+            if url.endswith("PLbad"):
+                raise worker.WorkerError("private")
+            return "public:PLgood"
+
+        with patch.object(worker, "ytdlp_public_json", return_value=profile), patch.object(worker, "refresh_public_playlist", side_effect=refresh):
+            worker.import_public_profile({"url": "https://music.youtube.com/@example"})
+        state = worker.dashboard()
+        self.assertEqual(state["public_profile_url"], "https://music.youtube.com/@example")
+        self.assertIn("Skipped 1 unreadable playlist", state["sync_notice"])
+
     def test_queue_deduplicates_exact_video_id(self):
         worker.seed_demo()
         worker.queue_track({"video_id": "demo_fog"})
