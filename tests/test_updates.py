@@ -69,6 +69,10 @@ def zip_bytes(entries):
     stream = io.BytesIO()
     with zipfile.ZipFile(stream, 'w') as bundle:
         for name, value in entries:
+            if isinstance(name, str):
+                info = zipfile.ZipInfo()
+                info.filename = info.orig_filename = name
+                name = info
             bundle.writestr(name, value)
     stream.seek(0)
     return stream

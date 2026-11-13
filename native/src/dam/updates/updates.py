@@ -211,7 +211,8 @@ def unpack(package, destination, root_name):
         if len(members) > 30000:
             raise ValueError("Update has too many files")
         for member in members:
-            name = member.filename.rstrip("/")
+            # ZipInfo normalizes backslashes on Windows; validate the original archive name.
+            name = member.orig_filename.rstrip("/")
             parts = name.split("/")
             if (not name or parts[0] != root_name or any(p in {"", ".", ".."} for p in parts)
                     or "\\" in name or ":" in name or name in seen):
