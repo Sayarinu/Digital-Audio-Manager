@@ -45,7 +45,7 @@ digital-audio-manager
 
 1. Click the account icon at the top right to **Sign in via Browser**. Use **Import Music** in the sidebar to sync your playlists or add a public playlist/album URL.
 2. Install FFmpeg and ffprobe on your computer. **Settings → Troubleshooting → Set Up Tools** installs Node.js when needed; yt-dlp is included with the app.
-3. Open a collection and choose **Download**, then start the queue with the download button in the bottom bar. Individual songs have download icons and overflow menus.
+3. Open a collection and choose **Download**, downloads start automatically. Queued work resumes when you reopen the app. Rate limits or session errors pause the queue with an explanation; use Retry or Resume Downloads after resolving them. Individual songs have download icons and overflow menus.
 4. Under **Settings → Downloads**, choose the Music folder where future downloads should live.
 5. **Downloads** shows downloaded files that are present on disk. Use a song’s **Remove Download** menu action to delete its audio and cover; the song stays available to download again. External file removal or drive reconnection is reflected automatically. Imported originals stay in **Local music**.
 6. Use **Import Music → Add Local Audio Files / Add Music Folder** for music you already own. Click a downloaded song to play it in the bottom player.

@@ -380,7 +380,9 @@ def dashboard(_payload=None):
         """)]
         profile = con.execute("SELECT value FROM setting WHERE key='public_profile_url'").fetchone()
         sync_notice = con.execute("SELECT value FROM setting WHERE key='last_sync_notice'").fetchone()
+        queue_pause = con.execute("SELECT value FROM setting WHERE key='queue_pause_reason'").fetchone()
         return {"playlists": playlists, "tracks": tracks, "jobs": jobs, "health": health_check(),
+                "queue_pause_reason": queue_pause["value"] if queue_pause else "",
                 "public_profile_url": profile["value"] if profile else None,
                 "sync_notice": sync_notice["value"] if sync_notice and sync_notice["value"] else None,
                 "activity": read_activity()}
@@ -990,6 +992,8 @@ def run_queue(_payload=None, session=None):
     completed, total = 0, con.execute("SELECT COUNT(*) FROM download_job WHERE state IN ('queued','retry')").fetchone()[0]
     write_activity("Downloading", 0, total)
     try:
+        con.execute("DELETE FROM setting WHERE key='queue_pause_reason'")
+        con.commit()
         while True:
             job = con.execute("""SELECT j.*, t.title, t.artist, t.album FROM download_job j JOIN track t ON t.video_id=j.video_id
                                  WHERE j.state IN ('queued','retry') ORDER BY j.created_at LIMIT 1""").fetchone()
@@ -1010,8 +1014,9 @@ def run_queue(_payload=None, session=None):
                 code, message = classify_error(str(exc))
                 con.execute("UPDATE track SET local_status='failed', updated_at=? WHERE video_id=?", (utcnow(), job["video_id"]))
                 con.execute("UPDATE download_job SET state='failed', error_code=?, error_message=?, updated_at=? WHERE id=?", (code, message, utcnow(), job["id"]))
-                con.commit()
                 if code in ("rate_limited", "proof_of_origin"):
+                    con.execute("INSERT OR REPLACE INTO setting VALUES ('queue_pause_reason', ?)", (message,))
+                    con.commit()
                     break
             con.commit()
             completed += 1
@@ -1078,7 +1083,7 @@ def reset_and_resync_library(_payload=None):
         con.execute("DELETE FROM playlist_item")
         con.execute("DELETE FROM track")
         con.execute("DELETE FROM playlist")
-        con.execute("DELETE FROM setting WHERE key='last_sync_notice'")
+        con.execute("DELETE FROM setting WHERE key IN ('last_sync_notice', 'queue_pause_reason')")
         con.commit()
     finally:
         con.close()
@@ -1108,6 +1113,7 @@ def retry_job(payload):
             raise WorkerError("Download job was not found.")
         con.execute("UPDATE download_job SET state='retry', error_code=NULL, error_message=NULL, updated_at=? WHERE id=?", (utcnow(), payload["job_id"]))
         con.execute("UPDATE track SET local_status='queued', updated_at=? WHERE video_id=?", (utcnow(), job["video_id"]))
+        con.execute("DELETE FROM setting WHERE key='queue_pause_reason'")
         con.commit()
     finally:
         con.close()

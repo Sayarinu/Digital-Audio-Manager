@@ -26,7 +26,9 @@ def authenticated_source(url, template, session, dependencies):
         options["ffmpeg_location"] = ffmpeg
     try:
         with YoutubeDL(options) as downloader:
-            downloader.cookiejar = session.cookie_jar()
+            # Keep yt-dlp's cookie jar: its extractor needs methods absent from CookieJar.
+            for cookie in session.cookie_jar():
+                downloader.cookiejar.set_cookie(cookie)
             return downloader.extract_info(url, download=True)
     except Exception as error:
         # Extractor failures may include signed URLs or cookies. Never persist the raw message.

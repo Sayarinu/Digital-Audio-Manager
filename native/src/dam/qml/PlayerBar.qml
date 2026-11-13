@@ -34,7 +34,7 @@ Rectangle {
     Row {
         anchors.right: parent.right; anchors.rightMargin: 16; anchors.verticalCenter: parent.verticalCenter; spacing: 2
         IconButton { iconName: "plus"; tip: "Import Music"; onClicked: root.importRequested() }
-        IconButton { objectName: "runQueueButton"; iconName: "download"; tip: appState.queueRunning ? "Downloading" : "Run Download Queue"; enabled: !appState.busy && !appState.queueRunning && (appState.data.jobs || []).length > 0; onClicked: appState.startQueue() }
+        IconButton { objectName: "runQueueButton"; iconName: "download"; tip: appState.queueRunning ? "Downloading" : appState.queuePauseReason ? "Resume Downloads" : "Downloads Start Automatically"; enabled: Boolean(appState.queuePauseReason) && !appState.busy && !appState.queueRunning && appState.hasQueuedDownloads; onClicked: appState.startQueue() }
         IconButton { objectName: "queueToggle"; iconName: "queue"; tip: "Download Queue"; onClicked: root.queueRequested() }
         IconButton { iconName: playerState.volume ? "volume" : "muted"; tip: playerState.volume ? "Mute" : "Unmute"; onClicked: playerState.setVolume(playerState.volume ? 0 : 0.7) }
         AccentSlider { anchors.verticalCenter: parent.verticalCenter; width: root.width < 1000 ? 60 : 80; height: 30; from: 0; to: 1; value: playerState.volume; Accessible.name: "Volume"; onMoved: playerState.setVolume(value) }

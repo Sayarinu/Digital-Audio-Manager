@@ -12,10 +12,11 @@ ColumnLayout {
     RowLayout {
         Layout.fillWidth: true; Layout.margins: root.compact ? 12 : 24; Layout.bottomMargin: 0
         AppText { text: "Queue"; font.pixelSize: root.compact ? 18 : 28; font.bold: true; Layout.fillWidth: true }
-        IconButton { iconName: "download"; tip: "Run Download Queue"; enabled: !appState.busy && !appState.queueRunning && (appState.data.jobs || []).length > 0; onClicked: appState.startQueue() }
+        IconButton { iconName: "download"; tip: "Resume Downloads"; visible: Boolean(appState.queuePauseReason); enabled: !appState.busy && !appState.queueRunning && appState.hasQueuedDownloads; onClicked: appState.startQueue() }
         IconButton { visible: root.compact; iconName: "close"; tip: "Close Queue"; onClicked: root.closeRequested() }
     }
-    AppText { text: (appState.data.jobs || []).length + " tracks • " + (appState.queueRunning ? "Downloading" : "Ready to download"); color: themeState.secondary; Layout.leftMargin: root.compact ? 16 : 24; Layout.rightMargin: 16; Layout.fillWidth: true; font.pixelSize: 13 }
+    AppText { text: (appState.data.jobs || []).length + " tracks • " + (appState.queueRunning ? "Downloading" : appState.queuePauseReason ? "Paused" : appState.hasQueuedDownloads ? "Starting automatically…" : "No pending downloads"); color: themeState.secondary; Layout.leftMargin: root.compact ? 16 : 24; Layout.rightMargin: 16; Layout.fillWidth: true; font.pixelSize: 13 }
+    AppText { text: appState.queuePauseReason; visible: Boolean(text); color: themeState.error; Layout.leftMargin: root.compact ? 16 : 24; Layout.rightMargin: 16; Layout.fillWidth: true; wrapMode: Text.Wrap; elide: Text.ElideNone; font.pixelSize: 12 }
     ListView {
         id: queue
         objectName: "queueList"
@@ -40,6 +41,6 @@ ColumnLayout {
             }
             ToolTip.text: modelData.error_message || ""; ToolTip.visible: hovered && ToolTip.text.length > 0; ToolTip.delay: 600
         }
-        AppText { visible: queue.count === 0; anchors.centerIn: parent; width: parent.width - 24; text: "Tracks you queue will appear here."; color: themeState.secondary; horizontalAlignment: Text.AlignHCenter; wrapMode: Text.Wrap; elide: Text.ElideNone }
+        AppText { visible: queue.count === 0; anchors.centerIn: parent; width: parent.width - 24; text: "Downloads start automatically when you add songs."; color: themeState.secondary; horizontalAlignment: Text.AlignHCenter; wrapMode: Text.Wrap; elide: Text.ElideNone }
     }
 }

@@ -1,6 +1,6 @@
 """Native view state; storage, downloads and network calls stay in processes."""
 
-from PySide6.QtCore import QObject, Property, QSettings, QTimer, QUrl, Signal, Slot
+from PySide6.QtCore import QObject, Property, QSettings, Qt, QTimer, QUrl, Signal, Slot
 from PySide6.QtGui import QDesktopServices
 
 from .jobs import Worker
@@ -45,6 +45,8 @@ class AppState(QObject):
         self._busy = ""
         self._pending = None
         self._queue_id = None
+        self._queue_error = ""
+        self._closed = False
         self._mount = str(self.settings.value("deviceFolder", ""))
         self._reduced = self.settings.value("reducedMotion", False, type=bool)
         self.worker = Worker(self, timeout_ms=3600000)
@@ -69,6 +71,7 @@ class AppState(QObject):
         self.files_poll.setInterval(5000)
         self.files_poll.timeout.connect(self.refresh)
         account.sessionChanged.connect(self._session_changed)
+        account.changed.connect(self._auto_start_queue, Qt.ConnectionType.QueuedConnection)
         self._sync_models()
         if not fixture:
             self.files_poll.start()
@@ -128,6 +131,19 @@ class AppState(QObject):
     @Property(bool, notify=changed)
     def queueRunning(self):
         return self._queue_id is not None
+
+    @Property(bool, notify=dataChanged)
+    def hasQueuedDownloads(self):
+        return any(job.get("state") in {"queued", "retry"} for job in self._data.get("jobs", []))
+
+    @Property(str, notify=changed)
+    def queuePauseReason(self):
+        return self._queue_error or self._data.get("queue_pause_reason", "")
+
+    @Slot()
+    def _auto_start_queue(self):
+        if not self._fixture and not self._closed and not self.queuePauseReason:
+            self.startQueue()
 
     @Property(str, notify=changed)
     def error(self):
@@ -356,8 +372,11 @@ class AppState(QObject):
 
     @Slot()
     def startQueue(self):
-        if self.queueRunning or self._busy:
+        if (self._closed or self.queueRunning or self._busy or not self.hasQueuedDownloads
+                or self.account.busy or self.account.reconnect):
             return
+        self._queue_error = ""
+        self._data["queue_pause_reason"] = ""
         self._queue_id = self.downloader.request("run_queue", {"authenticated": self.account.connected})
         self.poll.start()
         self.changed.emit()
@@ -397,6 +416,7 @@ class AppState(QObject):
                 self.refresh()
                 return
             self._set_data(result)
+            self._auto_start_queue()
         else:
             self._sync = result
             self.changed.emit()
@@ -411,6 +431,8 @@ class AppState(QObject):
         if identifier != self._pending:
             return
         operation = self._busy
+        if operation == "retry_job":
+            self._queue_error = ""
         self._error = result.pop("notice", "")
         self._revision += 1
         self._busy, self._pending = "", None
@@ -428,19 +450,25 @@ class AppState(QObject):
         self._settled()
 
     def _queue_finished(self, identifier, result):
+        if identifier != self._queue_id:
+            return
         self._revision += 1
         self._queue_id = None
         self._set_data(result)
         self._settled()
 
     def _queue_failed(self, identifier, error):
+        if identifier != self._queue_id:
+            return
         self._queue_id = None
+        self._queue_error = error["message"]
         self._error = error["message"]
         if needs_reconnect(error):
             self.account.requireReconnect(error["message"])
         self._settled()
 
     def _settled(self):
+        self._auto_start_queue()
         if not self.queueRunning and not self._busy:
             self.poll.stop()
         self.changed.emit()
@@ -450,11 +478,12 @@ class AppState(QObject):
         self.worker.reset()
         self.downloader.reset()
         self._queue_id = None
+        self._queue_error = ""
         self._busy, self._pending = "", None
-        self._settled()
         self.run("initialize", {})
 
     def close(self):
+        self._closed = True
         self.files_poll.stop()
         self.poll.stop()
         for worker in (self.worker, self.reader, self.downloader, self.catalog):

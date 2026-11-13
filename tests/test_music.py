@@ -180,3 +180,22 @@ def test_missing_download_can_be_queued_without_a_prior_refresh(library):
     audio.unlink()
     result = engine.queue_track({'video_id': 'demo_fog'})
     assert any(job['video_id'] == 'demo_fog' and job['state'] == 'queued' for job in result['jobs'])
+
+
+def test_rate_limit_pauses_pending_jobs_until_explicit_retry(library, monkeypatch):
+    engine.seed_demo()
+    engine.queue_playlist({'playlist_id': 'demo:night-drive'})
+    attempts = []
+    def limited(track):
+        attempts.append(track['video_id'])
+        raise engine.WorkerError('Too many requests (429)')
+    monkeypatch.setattr(engine, 'run_download', limited)
+    result = engine.run_queue()
+    assert len(attempts) == 1
+    assert result['queue_pause_reason']
+    assert sum(job['state'] == 'queued' for job in result['jobs']) == 2
+    assert engine.dashboard()['queue_pause_reason'] == result['queue_pause_reason']
+    failed = next(job for job in result['jobs'] if job['state'] == 'failed')
+    retried = engine.retry_job({'job_id': failed['id']})
+    assert not retried['queue_pause_reason']
+    assert any(job['state'] == 'retry' for job in retried['jobs'])

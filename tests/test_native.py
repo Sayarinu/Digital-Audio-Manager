@@ -120,8 +120,11 @@ def test_protocol_never_echoes_unknown_request_or_secret(monkeypatch):
 
 
 def test_authenticated_extraction_keeps_secrets_in_memory(monkeypatch):
+    from yt_dlp.cookies import YoutubeDLCookieJar
+
     session = from_headers({"cookie": "__Secure-3PAPISID=synthetic-secret"})
     downloader = Mock()
+    downloader.cookiejar = YoutubeDLCookieJar()
     downloader.__enter__ = Mock(return_value=downloader)
     downloader.__exit__ = Mock(return_value=False)
     downloader.extract_info.return_value = {"id": "exact"}
@@ -140,6 +143,30 @@ def test_authenticated_extraction_keeps_secrets_in_memory(monkeypatch):
     assert engine.classify_error(str(error.value))[0] == "rate_limited"
     assert "synthetic-secret" not in str(error.value)
     assert SERVICE != "studio.nouvellelune.tubify"
+
+
+def test_authenticated_extractor_retains_real_downloader_cookie_interface(monkeypatch):
+    from yt_dlp import YoutubeDL
+    from yt_dlp.cookies import YoutubeDLCookieJar
+    from yt_dlp.extractor.youtube import YoutubeIE
+
+    session = from_headers({"cookie": "__Secure-3PAPISID=synthetic-session"})
+    def extract(downloader, url, download):
+        assert download is True
+        assert isinstance(downloader.cookiejar, YoutubeDLCookieJar)
+        cookies = YoutubeIE(downloader)._get_cookies(url)
+        assert cookies['__Secure-3PAPISID'].value == 'synthetic-session'
+        assert downloader.cookiejar.get_cookies_for_url(url)
+        assert not downloader.cookiejar.get_cookie_header('https://example.org/')
+        assert downloader.params.get('cookiefile') is None
+        assert downloader.params.get('cookiesfrombrowser') is None
+        next(iter(downloader.cookiejar)).value = 'rotated-in-downloader'
+        return {'id': 'abcdefghijk'}
+
+    monkeypatch.setattr(YoutubeDL, 'extract_info', extract)
+    assert authenticated_source('https://www.youtube.com/watch?v=abcdefghijk',
+                                'source.%(ext)s', session, {}) == {'id': 'abcdefghijk'}
+    assert session.cookies[0].value == 'synthetic-session'
 
 
 def test_empty_device_snapshot_is_valid_and_never_touches_other_files(library, monkeypatch):
