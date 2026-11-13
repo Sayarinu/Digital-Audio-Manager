@@ -1,7 +1,5 @@
 """Native view state; storage, downloads and network calls stay in processes."""
 
-from pathlib import Path
-
 from PySide6.QtCore import QObject, Property, QSettings, QTimer, QUrl, Signal, Slot
 from PySide6.QtGui import QDesktopServices
 
@@ -18,6 +16,7 @@ class AppState(QObject):
     collectionChanged = Signal()
     tracksChanged = Signal()
     navigationChanged = Signal()
+    searchChanged = Signal()
 
     def __init__(self, config, account, parent=None, fixture=None):
         super().__init__(parent)
@@ -33,6 +32,13 @@ class AppState(QObject):
         self._track_model = PageModel(self)
         self._playlist_model = PageModel(self)
         self._job_model = PageModel(self)
+        self._search_model = PageModel(self)
+        self._results = []
+        self._search_pending = None
+        self._search_error = ""
+        self._remote_query = ""
+        self.player = None
+        self._fixture = fixture is not None
         self._error = ""
         self._preview = {}
         self._sync = {}
@@ -43,6 +49,9 @@ class AppState(QObject):
         self._reduced = self.settings.value("reducedMotion", False, type=bool)
         self.worker = Worker(self, timeout_ms=3600000)
         self.reader = Worker(self)
+        self.catalog = Worker(self)
+        self.catalog.succeeded.connect(self._search_finished)
+        self.catalog.failed.connect(self._search_failed)
         self.downloader = Worker(self, timeout_ms=3600000)
         self.worker.succeeded.connect(self._finished)
         self.worker.failed.connect(self._failed)
@@ -56,9 +65,13 @@ class AppState(QObject):
         self.poll = QTimer(self)
         self.poll.setInterval(1000)
         self.poll.timeout.connect(self.refresh)
+        self.files_poll = QTimer(self)
+        self.files_poll.setInterval(5000)
+        self.files_poll.timeout.connect(self.refresh)
         account.sessionChanged.connect(self._session_changed)
         self._sync_models()
         if not fixture:
+            self.files_poll.start()
             self.run("initialize", {})
 
     @Property("QVariantMap", notify=dataChanged)
@@ -100,7 +113,7 @@ class AppState(QObject):
         else:
             rows = list({t["video_id"]: t for t in rows}.values())
         if self._view == "downloads":
-            rows = [t for t in rows if t["local_status"] == "ready"]
+            rows = [t for t in rows if t["local_status"] == "ready" and not t["video_id"].startswith("local:")]
         term = self._search.casefold()
         return [t for t in rows if term in (t["title"] + " " + t["artist"] + " " + (t.get("album") or "")).casefold()]
 
@@ -148,7 +161,7 @@ class AppState(QObject):
 
     @Slot(str)
     def navigate(self, view):
-        if view not in {"library", "downloads", "queue", "device", "settings"}:
+        if view not in {"library", "downloads", "queue", "device", "settings", "search"}:
             return
         if (self._view, self._selected, self._search) == (view, "", ""):
             return
@@ -182,6 +195,8 @@ class AppState(QObject):
         self.collectionChanged.emit()
         self.navigationChanged.emit()
         self.changed.emit()
+        if not self._fixture and self._view == "downloads":
+            self.refresh()
 
     def _sync_tracks(self, reset=False):
         rows = self._filtered_tracks()
@@ -204,6 +219,7 @@ class AppState(QObject):
             self.collectionChanged.emit()
         self._job_model.sync(self._data.get("jobs", []))
         self._sync_tracks()
+        self._sync_search()
 
     @Slot()
     def dismissError(self):
@@ -212,7 +228,7 @@ class AppState(QObject):
 
     @Slot(result=bool)
     def canClose(self):
-        if self._busy in {"sync_apply", "reset_and_resync_library", "repair_library_metadata", "set_music_folder"}:
+        if self._busy in {"sync_apply", "reset_and_resync_library", "repair_library_metadata", "set_music_folder", "remove_download"}:
             self._error = "Wait for the current file operation to finish before closing the app."
             self.changed.emit()
             return False
@@ -238,24 +254,99 @@ class AppState(QObject):
             self._error = "Could not open the download folder. Open it from your file manager."
             self.changed.emit()
 
+    @Property(bool, notify=tracksChanged)
+    def hasPlayableTracks(self):
+        return any(row.get("local_status") == "ready" and row.get("media_path") for row in self._tracks)
+
+    @Slot()
+    def playCollection(self):
+        row = next((row for row in self.tracks if row.get("local_status") == "ready" and row.get("media_path")), None)
+        if row:
+            self.openTrack(row["id"])
+
     @Slot(str)
     def openTrack(self, identifier):
         row = next((t for t in self._data.get("tracks", []) if t["id"] == identifier), {})
-        path = row.get("media_path")
-        if path and Path(path).is_file():
-            QDesktopServices.openUrl(QUrl.fromLocalFile(path))
-        else:
-            self._error = "This download is unavailable. Reconnect its drive or download it again."
-            self.changed.emit()
+        if self.player and row:
+            self.player.play_rows(self.tracks, row["video_id"])
+
+    @Slot(str)
+    def playSearchTrack(self, identifier):
+        if self.player:
+            self.player.play_rows(self._data.get("tracks", []), identifier)
+
+    @Slot("QVariantList")
+    def importFiles(self, urls):
+        paths = [QUrl(url).toLocalFile() for url in urls if QUrl(url).isLocalFile()]
+        if paths:
+            self.run("import_local_files", {"paths": paths})
+
+    @Property(QObject, constant=True)
+    def searchModel(self):
+        return self._search_model
+
+    @Property(str, notify=searchChanged)
+    def remoteQuery(self):
+        return self._remote_query
+
+    @Property(bool, notify=searchChanged)
+    def searching(self):
+        return self._search_pending is not None
+
+    @Property(str, notify=searchChanged)
+    def searchError(self):
+        return self._search_error
+
+    @Slot(str)
+    def searchMusic(self, query):
+        query = query.strip()
+        if not query:
+            return
+        if self._search_pending is not None:
+            self.catalog.cancel(self._search_pending)
+        self.navigate("search")
+        self._remote_query, self._search_error = query, ""
+        self._results = []
+        self._search_model.sync([], reset=True)
+        self._search_pending = self.catalog.request("search_music", {"query": query})
+        self.searchChanged.emit()
+
+    @Slot(str)
+    def queueSearchTrack(self, identifier):
+        track = next((t for t in self._results if t["video_id"] == identifier), None)
+        if track:
+            self.run("queue_search_track", {"track": track})
+
+    def _sync_search(self):
+        local = {row["video_id"]: row for row in self._data.get("tracks", [])}
+        rows = [dict(row, **{key: local[row["video_id"]][key] for key in ("local_status", "media_path")})
+                if row["video_id"] in local else row for row in self._results]
+        self._search_model.sync(rows)
+
+    def _search_finished(self, identifier, result):
+        if identifier != self._search_pending:
+            return
+        self._search_pending = None
+        self._results = result.get("results", [])
+        self._sync_search()
+        self.searchChanged.emit()
+
+    def _search_failed(self, identifier, error):
+        if identifier == self._search_pending:
+            self._search_pending = None
+            self._search_error = error["message"]
+            self.searchChanged.emit()
 
     @Slot(str, "QVariantMap")
     def run(self, operation, payload):
         if self._busy:
             return
-        if operation in {"reset_and_resync_library", "set_music_folder", "repair_library_metadata", "sync_apply"} and self.queueRunning:
+        if operation in {"reset_and_resync_library", "set_music_folder", "repair_library_metadata", "sync_apply", "remove_download"} and self.queueRunning:
             self._error = "Wait for the download queue to finish before changing the library."
             self.changed.emit()
             return
+        if self.player and operation in {"reset_and_resync_library", "repair_library_metadata", "remove_download"}:
+            self.player.close()
         self._busy, self._error = operation, ""
         if operation not in {"sync_preview", "sync_status"}:
             self._preview = {}
@@ -320,6 +411,7 @@ class AppState(QObject):
         if identifier != self._pending:
             return
         operation = self._busy
+        self._error = result.pop("notice", "")
         self._revision += 1
         self._busy, self._pending = "", None
         if operation in {"sync_preview", "sync_apply"}:
@@ -363,6 +455,7 @@ class AppState(QObject):
         self.run("initialize", {})
 
     def close(self):
+        self.files_poll.stop()
         self.poll.stop()
-        for worker in (self.worker, self.reader, self.downloader):
+        for worker in (self.worker, self.reader, self.downloader, self.catalog):
             worker.close()

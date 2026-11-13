@@ -10,6 +10,9 @@ def process_command(mode):
 
 
 def main():
+    if "--audio-smoke-test" in sys.argv:
+        from .player import decoder_smoke_test
+        return decoder_smoke_test()
     if "--extractor" in sys.argv:
         import yt_dlp
         yt_dlp.main(sys.argv[sys.argv.index("--extractor") + 1:])

@@ -5,7 +5,7 @@ import "components"
 
 ScrollView {
     id: root
-    property string section: "appearance"
+    property string section: "downloads"
     signal chooseMusic()
     signal connectAccount()
     signal importMusic()
@@ -14,13 +14,6 @@ ScrollView {
     contentWidth: availableWidth
     ColumnLayout {
         width: root.availableWidth; spacing: 20
-        ColumnLayout {
-            visible: root.section === "appearance"; Layout.fillWidth: true; spacing: 12
-            AppText { text: "Theme"; font.bold: true }
-            ThemedComboBox { Layout.fillWidth: true; Layout.maximumWidth: 360; model: themeState.themes; textRole: "name"; valueRole: "id"; currentIndex: { for (var i=0; i < count; ++i) { if (valueAt(i) === themeState.activeThemeId) return i } return 0 } onActivated: themeState.selectTheme(currentValue); Accessible.name: "Color theme" }
-            SettingsCheckBox { text: "Reduce motion"; checked: appState.reducedMotion; onToggled: appState.setReducedMotion(checked) }
-            AppText { text: "Turn off transitions and scrolling animations."; color: themeState.secondary; Layout.fillWidth: true; wrapMode: Text.Wrap }
-        }
         ColumnLayout {
             visible: root.section === "downloads"; Layout.fillWidth: true; spacing: 12
             AppText { text: "Download folder"; font.bold: true }

@@ -349,6 +349,8 @@ def health_check(_payload=None):
 def dashboard(_payload=None):
     con = connect()
     try:
+        reconcile_files(con)
+        con.commit()
         playlists = [dict(row) for row in con.execute("""
           SELECT p.id, p.title, p.source, p.loaded, p.updated_at, p.kind, COUNT(i.video_id) AS track_count
           FROM playlist p LEFT JOIN playlist_item i ON p.id = i.playlist_id
@@ -356,12 +358,18 @@ def dashboard(_payload=None):
         """)]
         tracks = [dict(row) for row in con.execute("""
           SELECT p.id || ':' || i.position AS id, p.id AS playlist_id, i.position, t.video_id,
-                 t.title, t.artist, CASE WHEN p.kind='unsorted' THEN t.album ELSE p.title END AS album, t.duration, t.artwork_url,
+                 t.title, t.artist, CASE WHEN p.kind='unsorted' OR t.video_id LIKE 'local:%' THEN t.album ELSE p.title END AS album, t.duration, t.artwork_url,
                  CASE WHEN t.local_status='failed' AND t.video_id LIKE 'unavailable:%' THEN 'unavailable' ELSE t.local_status END AS local_status,
                  t.media_path
           FROM playlist_item i JOIN playlist p ON p.id=i.playlist_id JOIN track t ON t.video_id=i.video_id
           ORDER BY p.title COLLATE NOCASE, i.position
         """)]
+        tracks.extend(dict(row) for row in con.execute("""
+          SELECT 'file:' || t.video_id AS id, '' AS playlist_id, 0 AS position,
+                 t.video_id, t.title, t.artist, t.album, t.duration, t.artwork_url, t.local_status, t.media_path
+          FROM track t WHERE t.video_id NOT LIKE 'local:%'
+          AND NOT EXISTS (SELECT 1 FROM playlist_item i WHERE i.video_id=t.video_id)
+        """))
         jobs = [dict(row) for row in con.execute("""
           SELECT j.id, j.video_id, t.title, t.artist, j.state, j.attempts, j.error_code,
                  j.error_message, j.updated_at
@@ -378,6 +386,49 @@ def dashboard(_payload=None):
                 "activity": read_activity()}
     finally:
         con.close()
+
+
+def reconcile_files(con):
+    """Keep retained paths so a reconnected drive restores availability."""
+    for row in con.execute("SELECT video_id, media_path, local_status FROM track WHERE local_status IN ('ready','missing')").fetchall():
+        path = row['media_path']
+        exists = bool(path and Path(path).is_file())
+        status = 'ready' if exists else 'missing'
+        if status != row['local_status']:
+            con.execute('UPDATE track SET local_status=? WHERE video_id=?', (status, row['video_id']))
+
+
+def remove_download(payload):
+    video_id = str(payload.get('video_id', ''))
+    con = connect()
+    try:
+        con.execute('BEGIN IMMEDIATE')
+        track = con.execute('SELECT * FROM track WHERE video_id=?', (video_id,)).fetchone()
+        if not track or video_id.startswith('local:'):
+            raise WorkerError('Only downloads made by this app can be deleted here. Imported originals are kept.')
+        if con.execute("SELECT 1 FROM download_job WHERE video_id=? AND state='running'", (video_id,)).fetchone():
+            raise WorkerError('Wait for this song to finish downloading before removing it.')
+        path = Path(track['media_path']) if track['media_path'] else None
+        if path:
+            protected = {Path(row[0]).resolve() for row in con.execute(
+                'SELECT media_path FROM track WHERE video_id!=? AND media_path IS NOT NULL', (video_id,))}
+            if not path.is_absolute() or path.resolve() in protected:
+                raise WorkerError('This file is also used by another library entry. Remove that reference before deleting the download.')
+            try:
+                path.unlink(missing_ok=True)
+                cover = path.with_suffix('.jpg')
+                if cover.resolve() not in protected:
+                    cover.unlink(missing_ok=True)
+            except OSError as exc:
+                raise WorkerError('Could not delete the download. Close other players and check folder permissions, then try again.') from exc
+        con.execute("UPDATE download_job SET state='cancelled', updated_at=? WHERE video_id=? AND state IN ('queued','retry','failed')", (utcnow(), video_id))
+        con.execute("""UPDATE track SET local_status='missing', media_path=NULL, checksum=NULL,
+                       artwork_url=CASE WHEN artwork_url LIKE 'file:%' THEN NULL ELSE artwork_url END,
+                       updated_at=? WHERE video_id=?""", (utcnow(), video_id))
+        con.commit()
+    finally:
+        con.close()
+    return dashboard()
 
 
 def require_url_playlist(url):
@@ -602,9 +653,10 @@ def ensure_unsorted_collection(con):
 def queue_video_ids(con, video_ids, missing_only=True):
     """Queue known, playable tracks once and return the number newly queued."""
     queued, now = 0, utcnow()
+    reconcile_files(con)
     for video_id in dict.fromkeys(video_ids):
         track = con.execute("SELECT local_status FROM track WHERE video_id=?", (video_id,)).fetchone()
-        if not track or track["local_status"] == "unavailable" or video_id.startswith("unavailable:"):
+        if not track or track["local_status"] == "unavailable" or video_id.startswith(("unavailable:", "local:")):
             continue
         if missing_only and track["local_status"] == "ready":
             continue
@@ -755,7 +807,7 @@ def queue_track(payload):
         track = con.execute("SELECT video_id, local_status FROM track WHERE video_id = ?", (video_id,)).fetchone()
         if not track:
             raise WorkerError("This exact video is no longer in the local catalog.")
-        if track["local_status"] == "unavailable" or video_id.startswith("unavailable:"):
+        if track["local_status"] == "unavailable" or video_id.startswith(("unavailable:", "local:")):
             raise WorkerError("This public playlist entry has no playable video ID.")
         queue_video_ids(con, [video_id])
         con.commit()
@@ -949,8 +1001,10 @@ def run_queue(_payload=None, session=None):
             con.commit()
             try:
                 destination, codec, digest, metadata = run_download(job, session=session) if session else run_download(job)
-                con.execute("UPDATE track SET title=?, artist=?, album=?, local_status='ready', media_path=?, source_codec=?, checksum=?, updated_at=? WHERE video_id=?",
-                            (metadata["title"], metadata["artist"], metadata["album"], str(destination), codec, digest, utcnow(), job["video_id"]))
+                cover = destination.with_suffix(".jpg")
+                artwork_url = cover.resolve().as_uri() if cover.is_file() else None
+                con.execute("UPDATE track SET title=?, artist=?, album=?, local_status='ready', media_path=?, source_codec=?, checksum=?, artwork_url=COALESCE(?, artwork_url), updated_at=? WHERE video_id=?",
+                            (metadata["title"], metadata["artist"], metadata["album"], str(destination), codec, digest, artwork_url, utcnow(), job["video_id"]))
                 con.execute("UPDATE download_job SET state='completed', error_code=NULL, error_message=NULL, updated_at=? WHERE id=?", (utcnow(), job["id"]))
             except Exception as exc:
                 code, message = classify_error(str(exc))
@@ -971,7 +1025,7 @@ def run_queue(_payload=None, session=None):
 def repair_library_metadata(_payload=None):
     con = connect()
     try:
-        tracks = con.execute("SELECT * FROM track WHERE local_status='ready' AND lower(artist) IN ('unknown artist','unknown') ORDER BY updated_at").fetchall()
+        tracks = con.execute("SELECT * FROM track WHERE local_status='ready' AND video_id NOT LIKE 'local:%' AND lower(artist) IN ('unknown artist','unknown') ORDER BY updated_at").fetchall()
         for track in tracks:
             try:
                 metadata = resolved_track_metadata(track, exact_video_info(track["video_id"]))
@@ -993,11 +1047,29 @@ def reset_and_resync_library(_payload=None):
         raise WorkerError("Reconnect your Music folder before resetting the library.")
     masters = library_root()
     temporary = app_data() / "downloads"
-    # These are fixed app-owned directories; device exports deliberately remain untouched.
+    con = connect()
+    try:
+        protected = {Path(row[0]).resolve() for row in con.execute(
+            "SELECT media_path FROM track WHERE video_id LIKE 'local:%' AND media_path IS NOT NULL")}
+    finally:
+        con.close()
     write_activity("Clearing library", 0, 2)
     for index, target in enumerate((masters, temporary), 1):
         if target.exists():
-            shutil.rmtree(target)
+            if any(path.is_relative_to(target.resolve()) for path in protected):
+                for directory, folders, files in os.walk(target, topdown=False):
+                    for name in files:
+                        path = Path(directory) / name
+                        if path.resolve() not in protected:
+                            path.unlink()
+                    for name in folders:
+                        path = Path(directory) / name
+                        if path.is_symlink():
+                            path.unlink()
+                        elif not any(path.iterdir()):
+                            path.rmdir()
+            else:
+                shutil.rmtree(target)
         target.mkdir(parents=True, exist_ok=True)
         write_activity("Clearing library", index, 2)
     con = connect()
@@ -1186,7 +1258,7 @@ def sync_apply(payload):
 
 
 OPERATIONS = {"dashboard": dashboard, "health_check": health_check, "bootstrap_dependencies": bootstrap_dependencies, "import_public_profile": import_public_profile,
-              "set_music_folder": set_music_folder,
+              "set_music_folder": set_music_folder, "remove_download": remove_download,
               "import_playlist_url": import_playlist_url, "import_to_unsorted": import_to_unsorted,
               "seed_demo": seed_demo, "queue_track": queue_track, "queue_playlist": queue_playlist,
               "run_queue": run_queue, "repair_library_metadata": repair_library_metadata, "reset_and_resync_library": reset_and_resync_library,

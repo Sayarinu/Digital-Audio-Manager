@@ -1,6 +1,6 @@
 # Building the native app
 
-Digital Audio Manager uses Python, PySide6 Essentials and Qt Quick/QML, matching Tubify's native stack. Python 3.12 or later is required for source installs; CI uses Python 3.14. Packaged apps include Python and Qt.
+Digital Audio Manager uses Python, PySide6 Essentials/Addons and Qt Quick/QML, matching Tubify's native stack. Python 3.12 or later is required for source installs; CI uses Python 3.14. Packaged apps include Python and Qt.
 
 ## Development
 
@@ -41,10 +41,14 @@ Build on each target platform:
 python -m PyInstaller --noconfirm packaging/desktop.spec
 ```
 
-Output is under `dist/`: a macOS `.app` and a portable application directory on Windows/Linux. Keep the entire directory together. Linux builds require the target system's Qt platform libraries; build on the oldest supported distribution rather than copying a build from a newer libc system. macOS builds target the architecture of the machine running the build. Windows builds include an executable and its supporting files. These are unsigned native packages, with no updater.
+Output is under `dist/`: a macOS `.app` and a portable application directory on Windows/Linux. Keep the entire directory together. Linux builds require the target system's Qt platform libraries; build on the oldest supported distribution rather than copying a build from a newer libc system. macOS builds target the architecture of the machine running the build. Windows builds include an executable and its supporting files. The app includes Qt Multimedia’s decoder backend. Native audio checks decode generated silence without using speakers. Release archives are signed with an app-specific Ed25519 key; OS signing/notarization is not configured.
 
 Qt's [PyInstaller deployment guide](https://doc.qt.io/qtforpython-6/deployment/deployment-pyinstaller.html) describes platform packaging. Folder defaults use [QStandardPaths](https://doc.qt.io/qtforpython-6/PySide6/QtCore/QStandardPaths.html), including localized Music folders.
 
 ## Releases
 
-PR and main CI build and check native packages on Windows, macOS and Linux. Tag releases archive those native builds as ZIPs; they do not produce the old web-wrapper installers. A maintainer updates `pyproject.toml`, completes real-account/platform checks and pushes a `v*` tag. Publication waits for all platform package jobs to succeed. No release is created by ordinary branch work.
+PR checks build and verify packages on Windows, macOS and Linux. Feature PRs target experimental; a reviewed promotion PR brings experimental to main. Merging publishes automatically: experimental creates prereleases, while main creates Stable releases. Release tags use Digital-Audio-Manager-X.Y.Z and Digital-Audio-Manager-Experimental-X.Y.ZbN. The largest merged PR label selects Major Release, Feature, or a patch bump, using Tubify's version rules.
+
+The release workflow stamps assets/build-version.txt, preserves executable modes and macOS framework links in platform ZIPs, and signs each archive using the DAM_UPDATE_PRIVATE_KEY repository secret. Its public key is embedded in assets/update-public-key. Publication waits for all platform checks and signatures. Private keys must never enter source, build artifacts or logs.
+
+Settings → Updates selects Stable/Experimental and automatic checks. Downloads require fresh GitHub metadata, exact platform/architecture matching, SHA-256 integrity and the embedded Ed25519 signature. A verified archive is staged beside the installed app. A detached OS helper waits for shutdown, swaps only the app folder, rolls back a failed swap and restarts. Source installs or non-writable locations use Release Details for manual upgrades. Settings, media and device exports remain outside the app folder; updates refuse installations containing referenced user data. No release is published from a feature branch or PR check.

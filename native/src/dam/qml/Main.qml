@@ -34,6 +34,8 @@ ApplicationWindow {
     function openImport() { importDialog.open() }
     FolderDialog { id: musicFolder; title: "Choose your Music folder"; onAccepted: appState.setMusicFolder(selectedFolder) }
     FolderDialog { id: deviceFolder; title: "Choose a device or its Music folder"; onAccepted: appState.setDevice(selectedFolder) }
+    FileDialog { id: localFiles; title: "Add Local Music"; fileMode: FileDialog.OpenFiles; nameFilters: ["Audio files (*.mp3 *.m4a *.flac *.ogg *.opus *.wav *.aac *.wma *.aiff *.aif)", "All files (*)"]; onAccepted: appState.importFiles(selectedFiles) }
+    FolderDialog { id: localFolder; title: "Add a Music Folder"; onAccepted: appState.importFiles([selectedFolder]) }
     AccountDialog { id: accountDialog }
     ThemedDialog {
         id: confirmation
@@ -58,18 +60,22 @@ ApplicationWindow {
             ThemedTextField { id: importUrl; Layout.fillWidth: true; placeholderText: "Playlist or album URL"; Accessible.name: placeholderText; onAccepted: if (importButton.enabled) importButton.clicked() }
             ThemeActionButton { id: importButton; Layout.fillWidth: true; text: "Import & queue"; primary: true; enabled: Boolean(importUrl.text.trim()) && !appState.busy; onClicked: { appState.run("import_to_unsorted", {url:importUrl.text}); importDialog.close() } }
             ThemeActionButton { Layout.fillWidth: true; text: "Sync my YouTube Music playlists"; enabled: account.connected && !account.busy && !appState.busy; onClicked: { appState.run("import_account_library", {}); importDialog.close() } }
+            ThemeActionButton { Layout.fillWidth: true; text: "Add Local Audio Files"; enabled: !appState.busy; onClicked: { importDialog.close(); localFiles.open() } }
+            ThemeActionButton { Layout.fillWidth: true; text: "Add Music Folder"; enabled: !appState.busy; onClicked: { importDialog.close(); localFolder.open() } }
             ThemeActionButton { Layout.fillWidth: true; flat: true; text: "Connection Settings"; onClicked: { importDialog.close(); accountDialog.open() } }
         }
     }
     SettingsDialog {
         id: settingsDialog
         currentPage: appearanceSettings
-        sections: [{title:"General", pages:[appearanceSettings, downloadSettings]}, {title:"Library", pages:[importSettings]}, {title:"Support", pages:[maintenanceSettings]}]
+        sections: [{title:"General", pages:[appearanceSettings, downloadSettings]}, {title:"Library", pages:[importSettings]}, {title:"Support", pages:[updateSettings, maintenanceSettings]}]
     }
-    SettingsPage { id: appearanceSettings; objectName: "appearance"; host: settingsDialog; title: "Appearance"; SettingsPane { anchors.fill: parent; section: "appearance" } }
+    UpdateSettings { id: updateSettings; host: settingsDialog }
+    UpdateDialog { id: updateDialog }
+    AppearanceSettings { id: appearanceSettings; host: settingsDialog; dialogParent: window.contentItem }
     SettingsPage { id: downloadSettings; objectName: "downloads"; host: settingsDialog; title: "Downloads"; SettingsPane { anchors.fill: parent; section: "downloads"; onChooseMusic: musicFolder.open() } }
     SettingsPage { id: importSettings; objectName: "library"; host: settingsDialog; title: "Library"; SettingsPane { anchors.fill: parent; section: "library"; onConnectAccount: accountDialog.open(); onImportMusic: importDialog.open() } }
-    SettingsPage { id: maintenanceSettings; objectName: "maintenance"; host: settingsDialog; title: "Troubleshooting"; SettingsPane { anchors.fill: parent; section: "maintenance"; onResetLibrary: window.confirm("reset_and_resync_library", {}, "Reset local library?", "Delete the current download folder, catalog and queue? Device exports and downloads in previously chosen folders are kept.") } }
+    SettingsPage { id: maintenanceSettings; objectName: "maintenance"; host: settingsDialog; title: "Troubleshooting"; SettingsPane { anchors.fill: parent; section: "maintenance"; onResetLibrary: window.confirm("reset_and_resync_library", {}, "Reset local library?", "Delete the current download folder, catalog and queue? Imported local files, device exports and downloads in previously chosen folders are kept.") } }
 
     Rectangle {
         id: sidebar
@@ -133,16 +139,18 @@ ApplicationWindow {
             id: search
             objectName: "searchField"
             x: header.width < 600 ? 60 : 96; y: 11
-            width: Math.max(80, Math.min(480, settingsButton.x - x - 24)); height: 42
+            width: Math.max(80, Math.min(480, (updateButton.visible ? updateButton.x : settingsButton.x) - x - 24)); height: 42
             leftPadding: 42; rightPadding: text.length ? 40 : 16; radius: Theme.radiusMedium
-            font.pixelSize: 16; placeholderText: width < 300 ? "Search library" : "Search songs, albums, artists"
-            Accessible.name: "Search library"
-            enabled: appState.view === "library" || appState.view === "downloads"
+            font.pixelSize: 16; placeholderText: width < 300 ? "Search YouTube Music" : "Search YouTube Music · press Enter"
+            Accessible.name: "Search YouTube Music"
+            enabled: true
             Symbol { x: 14; anchors.verticalCenter: parent.verticalCenter; name: "search"; width: 20; height: 20; color: themeState.secondary }
             IconButton { anchors.right: parent.right; anchors.verticalCenter: parent.verticalCenter; width: 36; height: 36; iconSize: 20; iconName: "close"; tip: "Clear Search"; visible: search.text.length > 0; onClicked: { search.clear(); appState.search(""); search.forceActiveFocus() } }
-            onTextEdited: appState.search(text)
-            Connections { target: appState; function onNavigationChanged() { search.text = appState.searchQuery } function onTracksChanged() { if (search.text !== appState.searchQuery) search.text = appState.searchQuery } }
+            onTextEdited: if (appState.view !== "search") appState.search(text)
+            onAccepted: appState.searchMusic(text)
+            Connections { target: appState; function onNavigationChanged() { search.text = appState.view === "search" ? appState.remoteQuery : appState.searchQuery } function onSearchChanged() { if (appState.view === "search") search.text = appState.remoteQuery } function onTracksChanged() { if (appState.view !== "search" && search.text !== appState.searchQuery) search.text = appState.searchQuery } }
         }
+        IconButton { id: updateButton; objectName: "updateButton"; anchors.right: settingsButton.left; anchors.rightMargin: 12; y: 10; iconName: "update"; iconColor: themeState.accent; tip: maintenanceState.latestName || "Update Available"; visible: maintenanceState.updateAvailable || maintenanceState.downloading; onClicked: updateDialog.open() }
         IconButton { id: settingsButton; objectName: "settingsButton"; anchors.right: profileButton.left; anchors.rightMargin: 12; y: 10; iconName: "settings"; tip: "Settings"; onClicked: settingsDialog.open() }
         IconButton {
             id: profileButton
@@ -168,11 +176,11 @@ ApplicationWindow {
         Rectangle {
             id: banner
             width: parent.width; height: visible ? bannerRow.implicitHeight + 24 : 0
-            visible: Boolean(appState.error) || account.reconnect
+            visible: Boolean(appState.error) || Boolean(playerState.message) || account.reconnect
             color: themeState.surface
             RowLayout { id: bannerRow; anchors.fill: parent; anchors.margins: 12
-                AppText { text: appState.error || account.message; color: themeState.error; Layout.fillWidth: true; wrapMode: Text.WordWrap; elide: Text.ElideNone; Accessible.role: Accessible.AlertMessage }
-                ThemeActionButton { text: account.reconnect ? "Reconnect" : "Dismiss"; onClicked: account.reconnect ? accountDialog.open() : appState.dismissError() }
+                AppText { text: appState.error || playerState.message || account.message; color: themeState.error; Layout.fillWidth: true; wrapMode: Text.WordWrap; elide: Text.ElideNone; Accessible.role: Accessible.AlertMessage }
+                ThemeActionButton { text: account.reconnect ? "Reconnect" : "Dismiss"; onClicked: account.reconnect ? accountDialog.open() : playerState.message ? playerState.dismissMessage() : appState.dismissError() }
             }
         }
         Item {
@@ -190,7 +198,8 @@ ApplicationWindow {
             }
             Connections { target: appState; function onNavigationChanged() { if (appState.view === "settings") settingsDialog.open(); else pages.enter() } }
             // Keep the library viewport alive when opening another page or a popup.
-            LibraryPane { anchors.fill: parent; visible: ["library", "downloads", "settings"].indexOf(appState.view) >= 0; onImportMusic: importDialog.open(); onRemoveCollection: (id, title) => window.confirm("delete_library_collection", {playlist_id:id}, "Remove " + title + "?", "Remove this collection from your library? Downloaded audio and queued jobs are kept.") }
+            LibraryPane { anchors.fill: parent; visible: ["library", "downloads", "settings"].indexOf(appState.view) >= 0; onImportMusic: importDialog.open(); onRemoveDownload: (id, title) => window.confirm("remove_download", {video_id:id}, "Remove download?", "Delete the downloaded file and cover for “" + title + "” from this device? The song stays in your library so you can download it again."); onRemoveCollection: (id, title) => window.confirm("delete_library_collection", {collection_id:id}, "Remove " + title + "?", "Remove this collection from your library? Downloaded audio and queued jobs are kept.") }
+            SearchPane { anchors.fill: parent; visible: appState.view === "search" }
             QueuePane { anchors.fill: parent; visible: appState.view === "queue" }
             DevicePane { anchors.fill: parent; visible: appState.view === "device"; onChooseDevice: deviceFolder.open() }
         }
@@ -202,32 +211,20 @@ ApplicationWindow {
         shown: window.showQueue && window.width >= 1100 && appState.view !== "queue"
         QueuePane { anchors.fill: parent; compact: true; onCloseRequested: window.showQueue = false }
     }
-    Rectangle {
+    PlayerBar {
         id: statusBar
         objectName: "statusBar"
         anchors.left: parent.left; anchors.right: parent.right; anchors.bottom: parent.bottom; anchors.margins: 12
-        height: 92; radius: Theme.radiusMedium; color: themeState.surface; border.color: themeState.border
-        Cover { x: 16; y: 12; width: 68; height: 68; symbol: appState.queueRunning ? "download" : "music" }
-        Column { x: 96; anchors.verticalCenter: parent.verticalCenter; width: parent.width * 0.30 - 96; spacing: 5
-            AppText { width: parent.width; text: appState.data.activity ? appState.data.activity.label : appState.busy ? "Working…" : appState.queueRunning ? "Downloading your music" : "Your music"; font.bold: true }
-            AppText { width: parent.width; text: appState.queueRunning ? "Download queue is running" : (appState.data.jobs || []).length + " tracks in queue"; color: themeState.secondary; font.pixelSize: 12 }
-        }
-        Column {
-            anchors.centerIn: parent; spacing: 7
-            IconButton {
-                objectName: "runQueueButton"
-                anchors.horizontalCenter: parent.horizontalCenter; iconName: "download"; tip: appState.queueRunning ? "Downloading" : "Run Download Queue"; iconColor: themeState.onAccent
-                enabled: !appState.busy && !appState.queueRunning && (appState.data.jobs || []).length > 0
-                background: Rectangle { radius: 22; color: parent.down || parent.hovered ? themeState.accentHover : themeState.accent; opacity: parent.enabled ? 1 : 0.5; border.width: parent.visualFocus ? 2 : 0; border.color: themeState.foreground }
-                onClicked: appState.startQueue()
-            }
-            AppText { text: appState.queueRunning ? "Downloading…" : "Download queue"; color: themeState.secondary; font.pixelSize: 12 }
-        }
-        Row { anchors.right: parent.right; anchors.rightMargin: 16; anchors.verticalCenter: parent.verticalCenter; spacing: 8
-            BusyIndicator { width: 32; height: 44; running: Boolean(appState.busy) || appState.queueRunning; visible: running }
-            IconButton { iconName: "folder"; tip: "Open Download Folder"; onClicked: appState.openLibrary() }
-            IconButton { objectName: "queueToggle"; iconName: "queue"; tip: "Download Queue"; iconColor: window.showQueue || appState.view === "queue" ? themeState.accent : themeState.foreground; onClicked: { if (window.width >= 1100) window.showQueue = !window.showQueue; else appState.navigate("queue") } }
-            IconButton { iconName: "device"; tip: "Devices"; onClicked: appState.navigate("device") }
+        onImportRequested: importDialog.open()
+        onQueueRequested: { if (window.width >= 1100) window.showQueue = !window.showQueue; else appState.navigate("queue") }
+    }
+    Rectangle {
+        anchors.horizontalCenter: parent.horizontalCenter; anchors.bottom: statusBar.top; anchors.bottomMargin: 16
+        width: Math.min(540, window.width - 80); height: activityRow.implicitHeight + 20
+        radius: Theme.radiusSmall; color: themeState.hover; visible: Boolean(appState.busy) || appState.queueRunning
+        RowLayout { id: activityRow; anchors.fill: parent; anchors.margins: 10; spacing: 12
+            BusyIndicator { running: parent.parent.visible; Layout.preferredWidth: 24; Layout.preferredHeight: 24 }
+            AppText { Layout.fillWidth: true; text: appState.data.activity ? appState.data.activity.label + (appState.data.activity.total ? " • " + appState.data.activity.completed + " / " + appState.data.activity.total : "") : appState.queueRunning ? "Downloading your music…" : "Working…" }
         }
     }
     Shortcut { sequence: "Ctrl+F"; onActivated: search.forceActiveFocus() }

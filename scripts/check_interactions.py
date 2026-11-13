@@ -22,6 +22,9 @@ from PySide6.QtWidgets import QApplication
 from dam import app as application
 from dam.account.account import Account
 from dam.state import AppState
+from dam.player import Player
+from dam.color_picker import ColorSampler
+from dam.updates.maintenance import Maintenance
 from dam.theme import ThemeState
 
 
@@ -62,11 +65,15 @@ def main():
         artwork.write_text('<svg xmlns="http://www.w3.org/2000/svg" width="200" height="200"><rect width="200" height="200" fill="#627a84"/><circle cx="100" cy="100" r="60" fill="#223440"/></svg>')
         fixture["tracks"][0]["artwork_url"] = QUrl.fromLocalFile(str(artwork)).toString()
         state = AppState(config, account, fixture=fixture)
+        player = Player(config)
+        state.player = player
         theme = ThemeState(config)
+        maintenance = Maintenance(Path(directory) / "release.json", state, fixture=True)
+        color_sampler = ColorSampler()
         engine = QQmlApplicationEngine()
         warnings = []
         engine.warnings.connect(lambda messages: warnings.extend(str(message) for message in messages))
-        for name, value in (("appState", state), ("account", account), ("accountState", account), ("themeState", theme)):
+        for name, value in (("appState", state), ("account", account), ("accountState", account), ("themeState", theme), ("colorSampler", color_sampler), ("maintenanceState", maintenance), ("playerState", player)):
             engine.rootContext().setContextProperty(name, value)
         engine.load(QUrl.fromLocalFile(str(package / "qml" / "Main.qml")))
         assert engine.rootObjects(), "Window failed to load"
@@ -75,6 +82,14 @@ def main():
 
         def find(name):
             item = window.findChild(QObject, name)
+            if item is None:
+                pending = [window.contentItem()]
+                while pending:
+                    visual = pending.pop()
+                    if visual.objectName() == name:
+                        item = visual
+                        break
+                    pending.extend(visual.childItems())
             assert item is not None, name
             return item
 
@@ -93,6 +108,29 @@ def main():
             QTest.qWait(250)
             click("closeSettings")
             QTest.qWait(250)
+        click("settingsButton")
+        QTest.qWait(250)
+        click("themeCard-mint")
+        assert theme.activeThemeId == "mint"
+        click("addThemeButton")
+        QTest.qWait(200)
+        menu = find("addThemeMenu")
+        menu.setProperty("currentIndex", 0)
+        QTest.keyClick(window, Qt.Key.Key_Return)
+        QTest.qWait(250)
+        find("themeNameField").setProperty("text", "Synthetic custom theme")
+        click("themeNameSave")
+        QTest.qWait(250)
+        assert theme.activeThemeIsCustom
+        assert find("appearanceSettingsDialog").property("editingColors")
+        click("settingsNav-updateSettings")
+        assert find("updateChannelOption").property("currentIndex") == 0
+        find("updateChannelOption").setProperty("currentIndex", 1)
+        find("updateChannelOption").activated.emit(1)
+        assert maintenance.channel == "experimental"
+        assert not maintenance.busy  # Fixture checks must never query GitHub.
+        click("closeSettings")
+        QTest.qWait(250)
         click("profileButton")
         assert find("accountDialog").property("visible")
         QTest.qWait(250)
@@ -128,6 +166,8 @@ def main():
         assert not warnings, "\n".join(warnings)
         print(json.dumps({"settings_open_median_ms": round(statistics.median(timings), 2),
                           "update_8000_rows_ms": round(update_ms, 2), "scroll_preserved": True}))
+        player.close()
+        maintenance.close()
         state.close()
         account.close()
         # Destroy bindings while their context objects still exist.

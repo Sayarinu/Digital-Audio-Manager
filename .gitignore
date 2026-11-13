@@ -9,3 +9,6 @@ __pycache__/
 .env
 .DS_Store
 *.sqlite3
+
+# Stamped only in release builds.
+native/src/dam/assets/build-version.txt

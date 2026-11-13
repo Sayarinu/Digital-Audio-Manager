@@ -9,6 +9,7 @@ Item {
     objectName: "libraryPane"
     signal importMusic()
     signal removeCollection(string id, string title)
+    signal removeDownload(string id, string title)
     property var collection: appState.collection
     readonly property bool hasCollection: Boolean(collection.id)
     readonly property bool downloads: appState.view === "downloads"
@@ -106,7 +107,8 @@ Item {
             }
             Row {
                 visible: root.hasCollection; height: visible ? 64 : 0; spacing: 12
-                ThemeActionButton { anchors.verticalCenter: parent.verticalCenter; text: "Download"; primary: true; enabled: !appState.busy; onClicked: appState.run("queue_playlist", {playlist_id:root.collection.id}) }
+                ThemeActionButton { anchors.verticalCenter: parent.verticalCenter; text: "Play"; primary: true; enabled: appState.hasPlayableTracks; onClicked: appState.playCollection() }
+                ThemeActionButton { anchors.verticalCenter: parent.verticalCenter; text: "Download"; primary: true; visible: root.collection.source !== "Local files"; enabled: !appState.busy; onClicked: appState.run("queue_playlist", {playlist_id:root.collection.id}) }
                 IconButton { anchors.verticalCenter: parent.verticalCenter; iconName: "more"; tip: "Playlist Options"; onClicked: root.collectionMenu(root.collection, this) }
             }
             Item {
@@ -137,8 +139,8 @@ Item {
                     iconName: row.modelData.local_status === "ready" ? "check" : "download"
                     iconColor: ["ready", "queued", "downloading"].indexOf(row.modelData.local_status) >= 0 ? themeState.accent : themeState.foreground
                     disabledIconColor: iconColor
-                    tip: row.modelData.local_status === "ready" ? "Downloaded" : row.modelData.local_status === "queued" ? "Queued" : row.modelData.local_status === "downloading" ? "Downloading" : "Download"
-                    enabled: !appState.busy && ["ready", "unavailable", "queued", "downloading"].indexOf(row.modelData.local_status) < 0
+                    tip: String(row.modelData.video_id).indexOf("local:") === 0 ? "Local File" : row.modelData.local_status === "ready" ? "Downloaded" : row.modelData.local_status === "queued" ? "Queued" : row.modelData.local_status === "downloading" ? "Downloading" : "Download"
+                    enabled: !appState.busy && String(row.modelData.video_id).indexOf("local:") !== 0 && ["ready", "unavailable", "queued", "downloading"].indexOf(row.modelData.local_status) < 0
                     onClicked: appState.run("queue_track", {video_id:row.modelData.video_id})
                 }
                 IconButton { id: more; anchors.right: parent.right; anchors.verticalCenter: parent.verticalCenter; width: 36; height: 36; iconSize: 20; iconName: "more"; tip: "Song Options"; onClicked: { root.menuTrack = row.modelData; trackOptions.popup(this, width - trackOptions.implicitWidth, height, null) } }
@@ -154,17 +156,19 @@ Item {
     }
     ThemedMenu { id: libraryOptions
         ContextMenuItem { text: "Import Music"; onTriggered: root.importMusic() }
+        ContextMenuItem { text: "Open Download Folder"; onTriggered: appState.openLibrary() }
         ContextMenuItem { text: "Refresh"; enabled: !appState.busy; onTriggered: appState.refresh() }
     }
     ThemedMenu { id: collectionOptions
-        ContextMenuItem { text: "Download Playlist"; enabled: !appState.busy; onTriggered: appState.run("queue_playlist", {playlist_id:root.menuCollection.id}) }
+        ContextMenuItem { text: "Download Playlist"; enabled: !appState.busy && root.menuCollection.source !== "Local files"; onTriggered: appState.run("queue_playlist", {playlist_id:root.menuCollection.id}) }
         ContextMenuItem { text: "Refresh Library"; enabled: !appState.busy; onTriggered: appState.refresh() }
         ThemedMenuSeparator {}
         ContextMenuItem { text: "Remove from Library"; enabled: !appState.busy && root.menuCollection.kind !== "unsorted"; onTriggered: root.removeCollection(root.menuCollection.id, root.menuCollection.title) }
     }
     ThemedMenu { id: trackOptions
-        ContextMenuItem { text: "Open Download"; enabled: root.menuTrack.local_status === "ready"; onTriggered: appState.openTrack(root.menuTrack.id) }
-        ContextMenuItem { text: "Download"; enabled: !appState.busy && root.menuTrack.local_status !== "unavailable"; onTriggered: appState.run("queue_track", {video_id:root.menuTrack.video_id}) }
+        ContextMenuItem { text: "Play"; enabled: root.menuTrack.local_status === "ready"; onTriggered: appState.openTrack(root.menuTrack.id) }
+        ContextMenuItem { text: "Download"; enabled: !appState.busy && ["ready", "queued", "downloading", "unavailable"].indexOf(root.menuTrack.local_status) < 0 && String(root.menuTrack.video_id || "").indexOf("local:") !== 0; onTriggered: appState.run("queue_track", {video_id:root.menuTrack.video_id}) }
+        ContextMenuItem { text: "Remove Download"; enabled: !appState.busy && !appState.queueRunning && Boolean(root.menuTrack.media_path) && String(root.menuTrack.video_id || "").indexOf("local:") !== 0; onTriggered: root.removeDownload(root.menuTrack.video_id, root.menuTrack.title) }
     }
     Connections { target: appState; function onNavigationChanged() { songs.positionViewAtBeginning() } }
 }

@@ -14,9 +14,12 @@ from PySide6.QtQuickControls2 import QQuickStyle
 from PySide6.QtWidgets import QApplication
 
 from .account.account import Account
+from .color_picker import ColorSampler
 from .paths import data_directory
 from .state import AppState
+from .player import Player
 from .theme import ThemeState
+from .updates.maintenance import Maintenance
 
 
 def main():
@@ -24,7 +27,7 @@ def main():
     parser.add_argument("--smoke-test", action="store_true")
     parser.add_argument("--screenshot")
     parser.add_argument("--fixture", action="store_true")
-    parser.add_argument("--view", choices=["library", "downloads", "queue", "device", "settings", "collection"], default="library")
+    parser.add_argument("--view", choices=["library", "downloads", "queue", "device", "settings", "collection", "search"], default="library")
     parser.add_argument("--theme", default="classic-dark")
     parser.add_argument("--empty", action="store_true")
     parser.add_argument("--width", type=int, default=1280)
@@ -62,22 +65,32 @@ def main():
     if fixture and args.empty:
         fixture.update(playlists=[], tracks=[], jobs=[])
     state = AppState(config, account, fixture=fixture)
+    player = Player(config)
+    state.player = player
     theme = ThemeState(config)
     if synthetic:
         if args.view == "collection" and fixture["playlists"]:
             state.selectCollection(fixture["playlists"][0]["id"])
         else:
             state.navigate(args.view)
+        if args.view == "search":
+            state._remote_query = "Synthetic music"
+            state._results = fixture["tracks"]
+            state._sync_search()
         if args.state == "loading":
             state._busy = "initialize"
         elif args.state == "error":
             state._error = "Could not refresh your library. Check your connection and retry."
         theme.selectTheme(args.theme)
+    maintenance = Maintenance(root / "release.json", state, fixture=synthetic)
+    color_sampler = ColorSampler()
     engine = QQmlApplicationEngine()
-    for name, value in (("appState", state), ("account", account), ("accountState", account), ("themeState", theme)):
+    for name, value in (("appState", state), ("account", account), ("accountState", account), ("themeState", theme), ("colorSampler", color_sampler), ("maintenanceState", maintenance), ("playerState", player)):
         engine.rootContext().setContextProperty(name, value)
     engine.load(QUrl.fromLocalFile(str(Path(__file__).parent / "qml" / "Main.qml")))
     if not engine.rootObjects():
+        player.close()
+        maintenance.close()
         state.close()
         account.close()
         lock.unlock()
@@ -86,6 +99,8 @@ def main():
     window.setWidth(args.width if synthetic else max(920, min(state.settings.value("windowWidth", 1280, type=int), app.primaryScreen().availableGeometry().width())))
     window.setHeight(args.height if synthetic else max(620, min(state.settings.value("windowHeight", 820, type=int), app.primaryScreen().availableGeometry().height())))
 
+    if not synthetic:
+        maintenance.start()
     if synthetic and args.dialog:
         QTimer.singleShot(0, window.openAccount if args.dialog == "account" else window.openImport)
 
@@ -93,6 +108,8 @@ def main():
         state.settings.setValue("windowWidth", window.width())
         state.settings.setValue("windowHeight", window.height())
         state.settings.sync()
+        player.close()
+        maintenance.close()
         state.close()
         account.close()
 

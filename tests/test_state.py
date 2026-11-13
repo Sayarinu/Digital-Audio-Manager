@@ -123,3 +123,19 @@ def test_search_and_back_use_local_catalog_without_worker_calls(tmp_path, monkey
     assert [row["id"] for row in state.tracks] == ["42"]
     assert not state.worker.requests and not state.reader.requests
     state.close()
+
+
+def test_new_search_cancels_old_request_and_ignores_stale_results(tmp_path, monkeypatch):
+    _app = QCoreApplication.instance() or QCoreApplication([])
+    state = make_state(tmp_path, monkeypatch)
+    state.searchMusic('first')
+    state.searchMusic('second')
+    assert state.catalog.cancelled == [1]
+    state.catalog.succeeded.emit(1, {'results': [{'video_id': 'stale'}]})
+    assert state.searchModel.rowCount() == 0 and state.searching
+    track = dict(video_id='abcdefghijk', title='Selected', artist='Artist')
+    state.catalog.succeeded.emit(2, {'results': [track]})
+    assert state.searchModel.rowCount() == 1 and not state.searching
+    state.queueSearchTrack('abcdefghijk')
+    assert state.worker.requests == [('queue_search_track', {'track': track})]
+    state.close()

@@ -2,6 +2,7 @@
 
 import contextlib
 import json
+from pathlib import Path
 import sys
 
 from . import engine
@@ -41,13 +42,29 @@ def initialize():
         with con:
             con.execute("UPDATE download_job SET state='retry' WHERE state='running'")
             con.execute("UPDATE track SET local_status='queued' WHERE local_status='downloading'")
+            for row in con.execute("SELECT video_id, media_path FROM track WHERE local_status='ready' AND media_path IS NOT NULL AND COALESCE(artwork_url, '') NOT LIKE 'file:%'").fetchall():
+                cover = Path(row["media_path"]).with_suffix(".jpg")
+                if cover.is_file():
+                    con.execute("UPDATE track SET artwork_url=? WHERE video_id=?", (cover.resolve().as_uri(), row["video_id"]))
     finally:
         con.close()
     engine.clear_activity()
     return engine.dashboard()
 
 
-def perform(service, operation, payload):
+def perform(service, operation, payload, progress=None):
+    if operation == "maintenance":
+        from .updates.maintenance import perform as maintain
+        return maintain(payload, progress=progress)
+    if operation == "search_music":
+        from .catalog import search_music
+        return search_music(payload)
+    if operation == "queue_search_track":
+        from .catalog import queue_search_track
+        return queue_search_track(payload)
+    if operation == "import_local_files":
+        from .local_music import import_files
+        return import_files(payload)
     if operation == "restore":
         return service.restore()
     if operation == "import_session":
@@ -91,7 +108,10 @@ def main():
             identifier = request["id"]
             # Libraries sometimes print diagnostics; this process has no log of provider output.
             with contextlib.redirect_stdout(None), contextlib.redirect_stderr(None):
-                result = perform(service, request["operation"], request.get("payload") or {})
+                def progress(value):
+                    output.write(json.dumps({"id": identifier, "progress": value}) + "\n")
+                    output.flush()
+                result = perform(service, request["operation"], request.get("payload") or {}, progress)
             response = {"id": identifier, "ok": True, "result": result}
         except Exception as error:
             response = {"id": identifier, "ok": False, "error": error_result(error)}

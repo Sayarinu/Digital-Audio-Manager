@@ -400,7 +400,10 @@ version = "1.0.1"
 source = { editable = "." }
 dependencies = [
     { name = "keyring" },
+    { name = "mutagen" },
+    { name = "pycryptodomex" },
     { name = "pyobjc-framework-cocoa", marker = "sys_platform == 'darwin'" },
+    { name = "pyside6-addons" },
     { name = "pyside6-essentials" },
     { name = "yt-dlp", extra = ["default"] },
     { name = "ytmusicapi" },
@@ -418,8 +421,11 @@ test = [
 [package.metadata]
 requires-dist = [
     { name = "keyring", specifier = "==25.7.0" },
+    { name = "mutagen", specifier = "==1.48.1" },
+    { name = "pycryptodomex", specifier = "==3.24.2" },
     { name = "pyinstaller", marker = "extra == 'build'", specifier = ">=6.10" },
     { name = "pyobjc-framework-cocoa", marker = "sys_platform == 'darwin'", specifier = ">=11" },
+    { name = "pyside6-addons", specifier = "==6.12.0" },
     { name = "pyside6-essentials", specifier = "==6.12.0" },
     { name = "pytest", marker = "extra == 'test'", specifier = ">=8" },
     { name = "ruff", marker = "extra == 'test'", specifier = ">=0.11" },
@@ -686,6 +692,21 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/c5/3e/1b24b56d3710a594dc2350ed6b321aaf0ee12fca3dafa6034bccffc8ac08/pyobjc_framework_cocoa-13.0-cp314-cp314t-macosx_10_15_universal2.whl", hash = "sha256:1a6b9f9e0ab123e51fa7df43bbc6c0414a444facd2225ad4f221a0d842c49ad6", size = 395844, upload-time = "2026-10-30T10:35:21.319Z" },
     { url = "https://files.pythonhosted.org/packages/f2/e0/b2f89d9c92e2b6513d8495d81c3a7d6042f936f51ed7dd2180615a01c980/pyobjc_framework_cocoa-13.0-cp315-cp315-macosx_10_15_universal2.whl", hash = "sha256:9282ebad57784ec18f4b7ea2e6b65bac0a6f56cc21a5c63e061fa48a9b49dd26", size = 392140, upload-time = "2026-10-30T10:35:22.562Z" },
     { url = "https://files.pythonhosted.org/packages/2c/ac/d2c8fa5d96ddf4e70ac5ddb23f24ac7861577728df342697125c1b42e159/pyobjc_framework_cocoa-13.0-cp315-cp315t-macosx_10_15_universal2.whl", hash = "sha256:f1e26ad2225d1c84973cce725f2f4aeeb4d5f653a36c8a9f0b691c5529dc7780", size = 396079, upload-time = "2026-10-30T10:35:23.821Z" },
+]
+
+[[package]]
+name = "pyside6-addons"
+version = "6.12.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "pyside6-essentials" },
+]
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/c3/16/c401d6455dbf49df37a8b142883e12d446abf51919c3e0ef5d9570e29160/pyside6_addons-6.12.0-cp310-abi3-macosx_14_0_universal2.whl", hash = "sha256:1d9bcd294ce1c9829194c7d13b01f771a2254b86cb3462cc3399321d2797fdac", size = 90545550, upload-time = "2026-10-08T09:08:14.778Z" },
+    { url = "https://files.pythonhosted.org/packages/ff/3e/0d6c5934de575286ac0699a701d4155048185035b8da0ee78d57a38bc7ef/pyside6_addons-6.12.0-cp310-abi3-manylinux_2_34_x86_64.whl", hash = "sha256:4ab38c0017f0453671a9313d3a53ca1c0e378924f54b07e596bcea94a9642391", size = 59192702, upload-time = "2026-10-08T09:08:21.13Z" },
+    { url = "https://files.pythonhosted.org/packages/94/14/b6c5683614601448c3ea8f19613ca378db75158ba594b662a8a8041e3e5f/pyside6_addons-6.12.0-cp310-abi3-manylinux_2_39_aarch64.whl", hash = "sha256:48cd0b639c06c9f79685f340ccae4319614b66d6efcdf06c2ce3836790d8c46e", size = 63646547, upload-time = "2026-10-08T09:08:26.921Z" },
+    { url = "https://files.pythonhosted.org/packages/02/41/ba3d52fe2acd942ebf71eb02b3bdf0897f7f6f4ce8f52289cb50228e48d3/pyside6_addons-6.12.0-cp310-abi3-win_amd64.whl", hash = "sha256:98d8d62010da6605344cee83e5c96fb846170a1f2d924523f10f5d92078b02b0", size = 40522402, upload-time = "2026-10-08T09:08:31.678Z" },
+    { url = "https://files.pythonhosted.org/packages/ea/73/860ab764368cd59b1a09cb891a9a4519425395ad1f6c47d83fde908fe603/pyside6_addons-6.12.0-cp310-abi3-win_arm64.whl", hash = "sha256:3c079cbaad2ad28bc5bfa92fd6bac4ba28d622b825825e3b4220f0682599b2db", size = 35940682, upload-time = "2026-10-08T09:08:35.424Z" },
 ]
 
 [[package]]
