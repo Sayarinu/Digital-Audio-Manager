@@ -17,6 +17,8 @@ ColumnLayout {
     }
     AppText { text: "Collections to export"; font.pixelSize: 18; font.bold: true; Layout.leftMargin: 24 }
     ListView {
+        id: collections
+        WheelScroll { view: collections }
         Layout.fillHeight: true; Layout.fillWidth: true; Layout.leftMargin: 24; Layout.rightMargin: 24; clip: true
         model: appState.playlists.filter(function(p) { return p.kind !== "unsorted" })
         ScrollBar.vertical: ScrollBar {}

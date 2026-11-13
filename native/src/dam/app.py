@@ -8,9 +8,10 @@ import sys
 import tempfile
 
 from PySide6.QtCore import QLockFile, QTimer, QUrl
-from PySide6.QtGui import QFont, QFontDatabase, QGuiApplication, QIcon
+from PySide6.QtGui import QFont, QFontDatabase, QIcon
 from PySide6.QtQml import QQmlApplicationEngine
 from PySide6.QtQuickControls2 import QQuickStyle
+from PySide6.QtWidgets import QApplication
 
 from .account.account import Account
 from .paths import data_directory
@@ -23,19 +24,21 @@ def main():
     parser.add_argument("--smoke-test", action="store_true")
     parser.add_argument("--screenshot")
     parser.add_argument("--fixture", action="store_true")
-    parser.add_argument("--view", choices=["library", "downloads", "queue", "device", "settings"], default="library")
+    parser.add_argument("--view", choices=["library", "downloads", "queue", "device", "settings", "collection"], default="library")
     parser.add_argument("--theme", default="classic-dark")
     parser.add_argument("--empty", action="store_true")
     parser.add_argument("--width", type=int, default=1280)
     parser.add_argument("--height", type=int, default=820)
+    parser.add_argument("--dialog", choices=["account", "import"])
+    parser.add_argument("--state", choices=["loading", "error"])
     args = parser.parse_args()
-    synthetic = args.fixture or args.smoke_test
+    synthetic = args.fixture or args.smoke_test or bool(args.screenshot)
     temporary = tempfile.TemporaryDirectory(prefix="dam-preview-") if synthetic else None
     if temporary:
         os.environ["MP3_MAKER_APP_DATA"] = str(Path(temporary.name) / "data")
         os.environ["MP3_MAKER_LIBRARY"] = str(Path(temporary.name) / "Music" / "Digital Audio Manager" / "Library")
     QQuickStyle.setStyle("Basic")
-    app = QGuiApplication(sys.argv[:1])
+    app = QApplication(sys.argv[:1])
     app.setApplicationName("Digital Audio Manager")
     app.setOrganizationName("Nouvelle Lune Atelier")
     assets = Path(__file__).parent / "assets"
@@ -61,10 +64,17 @@ def main():
     state = AppState(config, account, fixture=fixture)
     theme = ThemeState(config)
     if synthetic:
-        state.navigate(args.view)
+        if args.view == "collection" and fixture["playlists"]:
+            state.selectCollection(fixture["playlists"][0]["id"])
+        else:
+            state.navigate(args.view)
+        if args.state == "loading":
+            state._busy = "initialize"
+        elif args.state == "error":
+            state._error = "Could not refresh your library. Check your connection and retry."
         theme.selectTheme(args.theme)
     engine = QQmlApplicationEngine()
-    for name, value in (("appState", state), ("account", account), ("themeState", theme)):
+    for name, value in (("appState", state), ("account", account), ("accountState", account), ("themeState", theme)):
         engine.rootContext().setContextProperty(name, value)
     engine.load(QUrl.fromLocalFile(str(Path(__file__).parent / "qml" / "Main.qml")))
     if not engine.rootObjects():
@@ -76,6 +86,9 @@ def main():
     window.setWidth(args.width if synthetic else max(920, min(state.settings.value("windowWidth", 1280, type=int), app.primaryScreen().availableGeometry().width())))
     window.setHeight(args.height if synthetic else max(620, min(state.settings.value("windowHeight", 820, type=int), app.primaryScreen().availableGeometry().height())))
 
+    if synthetic and args.dialog:
+        QTimer.singleShot(0, window.openAccount if args.dialog == "account" else window.openImport)
+
     def shutdown():
         state.settings.setValue("windowWidth", window.width())
         state.settings.setValue("windowHeight", window.height())
@@ -86,7 +99,7 @@ def main():
     app.aboutToQuit.connect(shutdown)
     if args.screenshot:
         QTimer.singleShot(1200, lambda: window.grabWindow().save(args.screenshot))
-    if args.smoke_test:
+    if args.smoke_test or args.screenshot:
         QTimer.singleShot(1500, app.quit)
     result = app.exec()
     # Destroy QML bindings before their context objects.

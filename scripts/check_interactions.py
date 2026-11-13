@@ -1,0 +1,140 @@
+"""Exercise native clicks and catalog updates with a synthetic account and no worker requests."""
+
+import copy
+import json
+import os
+from pathlib import Path
+import statistics
+import tempfile
+import time
+
+os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+os.environ.setdefault("QT_QUICK_BACKEND", "software")
+
+from PySide6.QtCore import QObject, QPointF, Property, Qt, QUrl, Slot
+from PySide6.QtGui import QFont, QFontDatabase
+from PySide6.QtQml import QQmlApplicationEngine
+from PySide6.QtQuick import QQuickItem
+from PySide6.QtQuickControls2 import QQuickStyle
+from PySide6.QtTest import QTest
+from PySide6.QtWidgets import QApplication
+
+from dam import app as application
+from dam.account.account import Account
+from dam.state import AppState
+from dam.theme import ThemeState
+
+
+class PreviewAccount(Account):
+    @Property(bool, constant=True)
+    def signInAvailable(self):
+        return True
+
+    @Slot()
+    def signIn(self):
+        self._mode = "waiting"
+        self.changed.emit()
+
+    @Slot()
+    def cancelSignIn(self):
+        self._mode = ""
+        self.changed.emit()
+
+
+def main():
+    QQuickStyle.setStyle("Basic")
+    app = QApplication([])
+    package = Path(application.__file__).parent
+    for name in ("Roboto-Regular.ttf", "Roboto-Bold.ttf"):
+        QFontDatabase.addApplicationFont(str(package / "assets" / name))
+    font = QFont("Roboto")
+    font.setPixelSize(14)
+    app.setFont(font)
+    with tempfile.TemporaryDirectory(prefix="dam-interactions-") as directory:
+        config = Path(directory) / "native.ini"
+        account = PreviewAccount(config, fixture=True)
+        account._profile = {}
+        fixture = json.loads((package / "assets" / "preview.json").read_text())
+        fixture["tracks"] = [dict(fixture["tracks"][0], id=str(i), video_id=str(i), title=f"Song {i}")
+                             for i in range(8000)]
+        fixture["playlists"][0]["track_count"] = 8000
+        artwork = Path(directory) / "artwork.svg"
+        artwork.write_text('<svg xmlns="http://www.w3.org/2000/svg" width="200" height="200"><rect width="200" height="200" fill="#627a84"/><circle cx="100" cy="100" r="60" fill="#223440"/></svg>')
+        fixture["tracks"][0]["artwork_url"] = QUrl.fromLocalFile(str(artwork)).toString()
+        state = AppState(config, account, fixture=fixture)
+        theme = ThemeState(config)
+        engine = QQmlApplicationEngine()
+        warnings = []
+        engine.warnings.connect(lambda messages: warnings.extend(str(message) for message in messages))
+        for name, value in (("appState", state), ("account", account), ("accountState", account), ("themeState", theme)):
+            engine.rootContext().setContextProperty(name, value)
+        engine.load(QUrl.fromLocalFile(str(package / "qml" / "Main.qml")))
+        assert engine.rootObjects(), "Window failed to load"
+        window = engine.rootObjects()[0]
+        QTest.qWait(300)
+
+        def find(name):
+            item = window.findChild(QObject, name)
+            assert item is not None, name
+            return item
+
+        def click(name):
+            item = find(name)
+            assert isinstance(item, QQuickItem) and item.isVisible(), name
+            point = item.mapToScene(QPointF(item.width() / 2, item.height() / 2)).toPoint()
+            QTest.mouseClick(window, Qt.MouseButton.LeftButton, pos=point)
+
+        timings = []
+        for _ in range(5):
+            start = time.perf_counter()
+            click("settingsButton")
+            assert find("settingsDialog").property("visible")
+            timings.append((time.perf_counter() - start) * 1000)
+            QTest.qWait(250)
+            click("closeSettings")
+            QTest.qWait(250)
+        click("profileButton")
+        assert find("accountDialog").property("visible")
+        QTest.qWait(250)
+        click("browserSignIn")
+        assert account.signingIn
+        assert "Waiting" in find("browserSignIn").property("text")
+        QTest.qWait(250)
+        window.grabWindow().save(str(Path(directory) / "browser-sign-in.png"))
+        click("cancelBrowserSignIn")
+        assert not account.signingIn
+        QTest.keyClick(window, Qt.Key.Key_Escape)
+        QTest.qWait(250)
+        assert not find("accountDialog").property("visible")
+        state.navigate("downloads")
+        QTest.qWait(300)
+        songs = find("librarySongs")
+        songs.setProperty("contentY", 400.0)
+        QTest.qWait(50)
+        position = songs.property("contentY")
+        sample = copy.deepcopy(fixture)
+        sample["tracks"][40]["title"] = "Updated song"
+        start = time.perf_counter()
+        state._set_data(sample)
+        app.processEvents()
+        update_ms = (time.perf_counter() - start) * 1000
+        assert songs.property("contentY") == position
+        assert state.trackModel.rowCount() == 8000
+        click("queueToggle")
+        QTest.qWait(300)
+        state.setReducedMotion(True)
+        click("queueToggle")
+        QTest.qWait(50)
+        assert not warnings, "\n".join(warnings)
+        print(json.dumps({"settings_open_median_ms": round(statistics.median(timings), 2),
+                          "update_8000_rows_ms": round(update_ms, 2), "scroll_preserved": True}))
+        state.close()
+        account.close()
+        # Destroy bindings while their context objects still exist.
+        window = None
+        del engine
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

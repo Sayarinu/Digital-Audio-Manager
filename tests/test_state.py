@@ -47,7 +47,8 @@ def test_stale_poll_cannot_replace_a_completed_change(tmp_path, monkeypatch):
     current = {"tracks": [], "playlists": [], "jobs": [{"id": "new"}]}
     state.worker.succeeded.emit(1, current)
     state.reader.succeeded.emit(1, {"tracks": [], "playlists": [], "jobs": []})
-    assert state.data == current
+    assert state.data["jobs"] == current["jobs"]
+    assert state.tracks == []
     assert len(state.reader.requests) == 2
     state.close()
 
@@ -73,4 +74,52 @@ def test_closing_waits_for_device_file_operations(tmp_path, monkeypatch):
     assert not state.canClose()
     state.worker.succeeded.emit(1, {"physical_files_after": 0})
     assert state.canClose()
+    state.close()
+
+
+def catalog(count=100):
+    return {"playlists": [{"id": "playlist", "title": "Test", "track_count": count}],
+            "tracks": [{"id": str(i), "video_id": str(i), "playlist_id": "playlist", "title": f"Song {i}",
+                        "artist": "Artist", "local_status": "missing"} for i in range(count)],
+            "jobs": [], "health": {}}
+
+
+def test_busy_feedback_and_identical_poll_do_not_rebuild_catalog(tmp_path, monkeypatch):
+    from copy import deepcopy
+    from PySide6.QtTest import QSignalSpy
+
+    _app = QCoreApplication.instance() or QCoreApplication([])
+    state = make_state(tmp_path, monkeypatch)
+    snapshot = catalog(8000)
+    state._set_data(snapshot)
+    reset = QSignalSpy(state.trackModel.modelReset)
+    changed = QSignalSpy(state.trackModel.dataChanged)
+    library = QSignalSpy(state.libraryChanged)
+    state.run("queue_track", {"video_id": "1"})
+    state._set_data(deepcopy(snapshot))
+    assert reset.count() == changed.count() == library.count() == 0
+    assert state.trackModel.rowCount() == 8000
+    assert "tracks" not in state.data  # Shell progress bindings never serialize the song catalog.
+    updated = deepcopy(snapshot)
+    updated["tracks"][40]["local_status"] = "ready"
+    state._set_data(updated)
+    assert reset.count() == 0 and changed.count() == 1 and library.count() == 0
+    assert changed.at(0)[0].row() == changed.at(0)[1].row() == 40
+    state.close()
+
+
+def test_search_and_back_use_local_catalog_without_worker_calls(tmp_path, monkeypatch):
+    _app = QCoreApplication.instance() or QCoreApplication([])
+    state = make_state(tmp_path, monkeypatch)
+    state._set_data(catalog())
+    state.selectCollection("playlist")
+    state.search("Song 42")
+    assert [row["id"] for row in state.tracks] == ["42"]
+    state.navigate("downloads")
+    assert state.tracks == []
+    state.back()
+    assert state.collection["id"] == "playlist"
+    assert state.searchQuery == "Song 42"
+    assert [row["id"] for row in state.tracks] == ["42"]
+    assert not state.worker.requests and not state.reader.requests
     state.close()

@@ -42,10 +42,10 @@ python -m pip install -e .
 digital-audio-manager
 ```
 
-1. Open **Settings**. Connect your YouTube Music account and choose **Sync my playlists**, or paste a public playlist/album URL under **Import music**.
-2. Install FFmpeg and ffprobe on your computer. **Set up tools** installs Node.js when needed; yt-dlp is included with the app.
-3. Open a collection, choose **Add missing to queue**, then **Run queue**. Individual tracks also have a **Queue** action.
-4. Under **Settings → Download folder**, choose the Music folder where future downloads should live.
+1. Click the account icon at the top right to **Sign in via Browser**. Use **Import Music** in the sidebar to sync your playlists or add a public playlist/album URL.
+2. Install FFmpeg and ffprobe on your computer. **Settings → Troubleshooting → Set Up Tools** installs Node.js when needed; yt-dlp is included with the app.
+3. Open a collection and choose **Download**, then start the queue with the download button in the bottom bar. Individual songs have download icons and overflow menus.
+4. Under **Settings → Downloads**, choose the Music folder where future downloads should live.
 5. To export to a music player, open **Devices**, choose its folder, select playlists, then **Preview → Sync device**.
 
 On Windows, Firefox can be used when Chrome or Edge's cookie encryption prevents browser import. On macOS, the system may ask for keychain or browser-file access. A locked or unavailable secure keyring produces a reconnect message; public imports and existing downloads remain available.

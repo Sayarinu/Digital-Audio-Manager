@@ -6,12 +6,18 @@ from PySide6.QtCore import QObject, Property, QSettings, QTimer, QUrl, Signal, S
 from PySide6.QtGui import QDesktopServices
 
 from .jobs import Worker
+from .list_model import PageModel
 from .util import needs_reconnect
 
 
 class AppState(QObject):
     changed = Signal()
     preferencesChanged = Signal()
+    dataChanged = Signal()
+    libraryChanged = Signal()
+    collectionChanged = Signal()
+    tracksChanged = Signal()
+    navigationChanged = Signal()
 
     def __init__(self, config, account, parent=None, fixture=None):
         super().__init__(parent)
@@ -21,6 +27,12 @@ class AppState(QObject):
         self._view = "library"
         self._selected = ""
         self._search = ""
+        self._history = []
+        self._tracks = []
+        self._playlists = []
+        self._track_model = PageModel(self)
+        self._playlist_model = PageModel(self)
+        self._job_model = PageModel(self)
         self._error = ""
         self._preview = {}
         self._sync = {}
@@ -45,23 +57,43 @@ class AppState(QObject):
         self.poll.setInterval(1000)
         self.poll.timeout.connect(self.refresh)
         account.sessionChanged.connect(self._session_changed)
+        self._sync_models()
         if not fixture:
             self.run("initialize", {})
 
-    @Property("QVariantMap", notify=changed)
+    @Property("QVariantMap", notify=dataChanged)
     def data(self):
-        return self._data
+        return {key: value for key, value in self._data.items() if key not in {"tracks", "playlists"}}
 
-    @Property("QVariantList", notify=changed)
+    @Property("QVariantList", notify=libraryChanged)
     def playlists(self):
-        return self._data.get("playlists", [])
+        return self._playlists
 
-    @Property("QVariantMap", notify=changed)
+    @Property("QVariantMap", notify=collectionChanged)
     def collection(self):
         return next((p for p in self.playlists if p["id"] == self._selected), {})
 
-    @Property("QVariantList", notify=changed)
+    @Property(QObject, constant=True)
+    def trackModel(self):
+        return self._track_model
+
+    @Property(QObject, constant=True)
+    def playlistModel(self):
+        return self._playlist_model
+
+    @Property(QObject, constant=True)
+    def jobModel(self):
+        return self._job_model
+
+    @Property("QVariantList", notify=tracksChanged)
     def tracks(self):
+        return self._tracks
+
+    @Property(str, notify=tracksChanged)
+    def searchQuery(self):
+        return self._search
+
+    def _filtered_tracks(self):
         rows = self._data.get("tracks", [])
         if self._selected:
             rows = [t for t in rows if t["playlist_id"] == self._selected]
@@ -72,7 +104,7 @@ class AppState(QObject):
         term = self._search.casefold()
         return [t for t in rows if term in (t["title"] + " " + t["artist"] + " " + (t.get("album") or "")).casefold()]
 
-    @Property(str, notify=changed)
+    @Property(str, notify=navigationChanged)
     def view(self):
         return self._view
 
@@ -118,18 +150,60 @@ class AppState(QObject):
     def navigate(self, view):
         if view not in {"library", "downloads", "queue", "device", "settings"}:
             return
+        if (self._view, self._selected, self._search) == (view, "", ""):
+            return
+        self._history.append((self._view, self._selected, self._search))
         self._view, self._selected, self._search = view, "", ""
-        self.changed.emit()
+        self._navigated()
 
     @Slot(str)
     def selectCollection(self, identifier):
+        if self._selected == identifier:
+            return
+        self._history.append((self._view, self._selected, self._search))
         self._selected, self._view, self._search = identifier, "library", ""
-        self.changed.emit()
+        self._navigated()
 
     @Slot(str)
     def search(self, text):
-        self._search = text
+        if self._search != text:
+            self._search = text
+            self._sync_tracks()
+            self.tracksChanged.emit()
+
+    @Slot()
+    def back(self):
+        if self._history:
+            self._view, self._selected, self._search = self._history.pop()
+            self._navigated()
+
+    def _navigated(self):
+        self._sync_tracks(reset=True)
+        self.collectionChanged.emit()
+        self.navigationChanged.emit()
         self.changed.emit()
+
+    def _sync_tracks(self, reset=False):
+        rows = self._filtered_tracks()
+        if reset or rows != self._tracks:
+            self._tracks = rows
+            self._track_model.sync(rows, reset=reset)
+            self.tracksChanged.emit()
+
+    def _sync_models(self):
+        artwork = {}
+        for row in self._data.get("tracks", []):
+            if row.get("artwork_url") and row["playlist_id"] not in artwork:
+                artwork[row["playlist_id"]] = row["artwork_url"]
+        playlists = [dict(row, artwork_url=artwork.get(row["id"], ""))
+                     for row in self._data.get("playlists", [])]
+        if playlists != self._playlists:
+            self._playlists = playlists
+            self._playlist_model.sync(playlists)
+            self.libraryChanged.emit()
+            self.collectionChanged.emit()
+        self._job_model.sync(self._data.get("jobs", []))
+        self._sync_tracks()
 
     @Slot()
     def dismissError(self):
@@ -219,8 +293,10 @@ class AppState(QObject):
     def _set_data(self, result):
         if self._data != result:
             self._data = result
-            if self._selected and not self.collection:
+            if self._selected and not any(p["id"] == self._selected for p in result.get("playlists", [])):
                 self._selected = ""
+            self._sync_models()
+            self.dataChanged.emit()
             self.changed.emit()
 
     def _read(self, identifier, result):

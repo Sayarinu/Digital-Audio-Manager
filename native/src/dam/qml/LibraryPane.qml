@@ -4,86 +4,167 @@ import QtQuick.Layouts
 import "components"
 import "Theme.js" as Theme
 
-ColumnLayout {
+Item {
     id: root
-    signal removeCollection(string identifier, string title)
-    spacing: 16
-    readonly property var collection: appState.collection
-    readonly property var rows: appState.tracks
+    objectName: "libraryPane"
+    signal importMusic()
+    signal removeCollection(string id, string title)
+    property var collection: appState.collection
     readonly property bool hasCollection: Boolean(collection.id)
     readonly property bool downloads: appState.view === "downloads"
-
-    RowLayout {
-        Layout.fillWidth: true; Layout.leftMargin: 24; Layout.rightMargin: 24; Layout.topMargin: 28; spacing: 22
-        Cover { Layout.preferredWidth: root.hasCollection ? 128 : 72; Layout.preferredHeight: width; artwork: root.hasCollection && root.rows.length ? (root.rows[0].artwork_url || "") : ""; symbol: root.downloads ? "download" : "library" }
-        ColumnLayout {
-            Layout.fillWidth: true; spacing: 8
-            AppText { text: root.hasCollection ? "PLAYLIST" : "YOUR MUSIC"; font.pixelSize: 11; font.bold: true; color: themeState.secondary }
-            AppText { text: root.hasCollection ? root.collection.title : root.downloads ? "Downloads" : "Library"; font.pixelSize: 30; font.bold: true; Layout.fillWidth: true }
-            AppText { text: root.rows.length + " tracks" + (root.hasCollection ? " · " + root.collection.source : " · On your terms"); color: themeState.secondary; Layout.fillWidth: true }
+    property bool songsSelected: false
+    readonly property bool rows: hasCollection || downloads || songsSelected || appState.searchQuery.length > 0
+    property real gutter: Theme.gutter(width)
+    property var menuTrack: ({})
+    property var menuCollection: ({})
+    function collectionMenu(item, button) { menuCollection = item; collectionOptions.popup(button, 0, button.height, null) }
+    Component {
+        id: controls
+        Item {
+            width: parent.width
+            height: 158
+            Row {
+                height: 52; spacing: 24
+                Repeater { model: ["Library", "Downloads"]
+                    Button {
+                        id: tab; required property string modelData
+                        text: modelData; flat: true; height: 52
+                        palette.windowText: root.downloads === (modelData === "Downloads") ? themeState.foreground : themeState.secondary
+                        onClicked: appState.navigate(modelData.toLowerCase())
+                        Rectangle { anchors.bottom: parent.bottom; width: parent.width; height: 2; color: themeState.accent; visible: root.downloads === (tab.modelData === "Downloads") }
+                    }
+                }
+            }
+            Rectangle { y: 52; height: 1; width: parent.width; color: themeState.border }
+            Row { y: 84; spacing: 12
+                FilterChip { text: root.downloads ? "Songs" : "Playlists"; selected: root.downloads || !root.rows; onClicked: { root.songsSelected = false; appState.search("") } }
+                FilterChip { text: "Songs"; visible: !root.downloads; selected: root.songsSelected || appState.searchQuery.length > 0; onClicked: root.songsSelected = true }
+            }
+            IconButton { x: parent.width - width; y: 80; iconName: "more"; tip: "Library Options"; onClicked: libraryOptions.popup(this, width - libraryOptions.implicitWidth, height, null) }
         }
     }
-    RowLayout {
-        Layout.fillWidth: true; Layout.leftMargin: 24; Layout.rightMargin: 24; spacing: 8
-        ThemeActionButton { visible: root.hasCollection; text: "Add missing to queue"; primary: true; enabled: !appState.busy; onClicked: appState.run("queue_playlist", {playlist_id:root.collection.id, missing_only:true}) }
-        ThemeActionButton { visible: !root.hasCollection; text: "Import music"; primary: true; onClicked: appState.navigate("settings") }
-        ThemeActionButton { text: "Run queue"; enabled: !appState.busy && !appState.queueRunning && (appState.data.jobs || []).length > 0; onClicked: appState.startQueue() }
-        Item { Layout.fillWidth: true }
-        ThemeActionButton { text: "Refresh"; enabled: !appState.busy; flat: true; onClicked: appState.refresh() }
-        ThemeActionButton { visible: root.hasCollection && root.collection.kind !== "unsorted"; text: "Remove"; enabled: !appState.busy; flat: true; onClicked: root.removeCollection(root.collection.id, root.collection.title) }
-    }
-    ListView {
-        visible: !root.hasCollection && !root.downloads && appState.playlists.length > 0
-        Layout.fillWidth: true; Layout.preferredHeight: 126; Layout.leftMargin: 24; Layout.rightMargin: 24
-        orientation: ListView.Horizontal; clip: true; spacing: 12; model: appState.playlists
-        ScrollBar.horizontal: ScrollBar {}
-        delegate: Button {
+    GridView {
+        id: grid
+        objectName: "libraryGrid"
+        anchors.fill: parent; anchors.leftMargin: root.gutter; anchors.rightMargin: root.gutter
+        visible: !root.rows; clip: true; reuseItems: true; cacheBuffer: 0; bottomMargin: 32
+        property int columns: Math.max(1, Math.floor((width + 24) / (Theme.cardWidth + 24)))
+        cellWidth: width / columns; cellHeight: cellWidth + 84
+        model: appState.playlistModel
+        header: Loader { width: grid.width; height: 158; sourceComponent: controls }
+        WheelScroll { view: grid }
+        ScrollBar.vertical: ScrollBar {}
+        delegate: ItemDelegate {
             id: card
             required property var modelData
-            width: 200; height: 112; padding: 16
+            width: grid.cellWidth - 24; height: grid.cellHeight - 24; padding: 0
             Accessible.name: modelData.title + ", " + modelData.track_count + " tracks"
-            background: Rectangle { radius: 12; color: card.hovered ? themeState.hover : themeState.surface; border.width: card.visualFocus ? 2 : 0; border.color: themeState.accent }
-            contentItem: ColumnLayout { spacing: 8; Symbol { name: "music"; color: themeState.accent } AppText { text: card.modelData.title; font.bold: true; Layout.fillWidth: true } AppText { text: card.modelData.track_count + " tracks"; color: themeState.secondary; font.pixelSize: 12 } }
+            background: Item {}
+            contentItem: Item {
+                Cover {
+                    id: cover; width: parent.width; height: width; radius: Theme.radiusMedium
+                    artwork: card.modelData.artwork_url || ""
+                    Rectangle { anchors.fill: parent; anchors.margins: -4; radius: parent.radius + 4; color: "transparent"; border.width: 2; border.color: themeState.accent; visible: card.visualFocus }
+                    IconButton { anchors.right: parent.right; anchors.top: parent.top; anchors.margins: 6; width: 32; height: 32; iconSize: 20; iconName: "more"; tip: "Playlist Options"; visible: card.hovered || card.visualFocus || hovered; onClicked: root.collectionMenu(card.modelData, this) }
+                    IconButton {
+                        anchors.right: parent.right; anchors.bottom: parent.bottom; anchors.margins: 10
+                        iconName: "download"; tip: "Queue Playlist"; iconColor: themeState.onAccent
+                        opacity: card.hovered || card.visualFocus || hovered ? 1 : 0
+                        enabled: opacity > 0 && !appState.busy
+                        scale: opacity ? 1 : 0.85
+                        Behavior on opacity { NumberAnimation { duration: Theme.duration(Theme.motionFast, appState.reducedMotion) } }
+                        Behavior on scale { NumberAnimation { duration: Theme.duration(Theme.motionMedium, appState.reducedMotion); easing.type: Easing.OutBack } }
+                        background: Rectangle { radius: 22; color: parent.hovered ? themeState.accentHover : themeState.accent }
+                        onClicked: appState.run("queue_playlist", {playlist_id:card.modelData.id})
+                    }
+                }
+                AppText { anchors.top: cover.bottom; anchors.topMargin: 10; width: parent.width; text: card.modelData.title; font.weight: Font.DemiBold }
+                AppText { y: cover.height + 31; width: parent.width; text: "Playlist • " + card.modelData.track_count + " tracks"; color: themeState.secondary; font.pixelSize: 13 }
+            }
             onClicked: appState.selectCollection(modelData.id)
         }
     }
-    RowLayout {
-        Layout.fillWidth: true; Layout.leftMargin: 40; Layout.rightMargin: 40
-        AppText { text: "TITLE"; color: themeState.secondary; font.pixelSize: 11; Layout.fillWidth: true }
-        AppText { text: "STATUS"; color: themeState.secondary; font.pixelSize: 11; Layout.preferredWidth: 120 }
-        AppText { text: "TIME"; color: themeState.secondary; font.pixelSize: 11; Layout.preferredWidth: 50 }
-        Item { Layout.preferredWidth: 86 }
-    }
-    Rectangle { Layout.fillWidth: true; Layout.leftMargin: 24; Layout.rightMargin: 24; height: 1; color: themeState.border }
     ListView {
-        id: trackList
-        Layout.fillWidth: true; Layout.fillHeight: true; Layout.leftMargin: 24; Layout.rightMargin: 24
-        clip: true; reuseItems: true; model: root.rows; spacing: 2
+        id: songs
+        objectName: "librarySongs"
+        anchors.fill: parent; anchors.leftMargin: root.gutter; anchors.rightMargin: root.gutter
+        visible: root.rows; clip: true; reuseItems: true; cacheBuffer: 0; bottomMargin: 24
+        model: appState.trackModel
+        WheelScroll { view: songs }
         ScrollBar.vertical: ScrollBar {}
+        header: Column {
+            width: songs.width
+            Loader { width: parent.width; height: root.hasCollection ? 0 : 158; active: !root.hasCollection; sourceComponent: controls }
+            Item {
+                visible: root.hasCollection; width: parent.width; height: visible ? 220 : 0
+                Cover { id: heroCover; anchors.verticalCenter: parent.verticalCenter; width: parent.width < 600 ? 140 : 180; height: width; radius: Theme.radiusMedium; artwork: root.collection.artwork_url || "" }
+                Column { anchors.left: heroCover.right; anchors.leftMargin: 28; anchors.right: parent.right; anchors.verticalCenter: parent.verticalCenter; spacing: 12
+                    AppText { width: parent.width; text: "PLAYLIST"; font.pixelSize: 12; color: themeState.secondary }
+                    AppText { width: parent.width; text: root.collection.title || ""; font.pixelSize: root.width < 800 ? 28 : 36; font.bold: true; wrapMode: Text.Wrap; maximumLineCount: 2 }
+                    AppText { width: parent.width; text: "Your music • " + (root.collection.track_count || 0) + " tracks"; color: themeState.secondary }
+                }
+            }
+            Row {
+                visible: root.hasCollection; height: visible ? 64 : 0; spacing: 12
+                ThemeActionButton { anchors.verticalCenter: parent.verticalCenter; text: "Download"; primary: true; enabled: !appState.busy; onClicked: appState.run("queue_playlist", {playlist_id:root.collection.id}) }
+                IconButton { anchors.verticalCenter: parent.verticalCenter; iconName: "more"; tip: "Playlist Options"; onClicked: root.collectionMenu(root.collection, this) }
+            }
+            Item {
+                width: parent.width; height: 40
+                AppText { x: 8; anchors.verticalCenter: parent.verticalCenter; text: "#"; color: themeState.secondary; font.pixelSize: 12 }
+                AppText { x: 96; anchors.verticalCenter: parent.verticalCenter; text: "TITLE"; color: themeState.secondary; font.pixelSize: 12 }
+                AppText { anchors.right: parent.right; anchors.rightMargin: 94; anchors.verticalCenter: parent.verticalCenter; text: "TIME"; color: themeState.secondary; font.pixelSize: 12 }
+                Rectangle { anchors.bottom: parent.bottom; width: parent.width; height: 1; color: themeState.border }
+            }
+        }
         delegate: ItemDelegate {
             id: row
             required property int index
             required property var modelData
-            width: ListView.view.width; height: 64; leftPadding: 12; rightPadding: 12
+            width: ListView.view.width; height: 64; padding: 0
             Accessible.name: modelData.title + ", " + modelData.artist + ", " + modelData.local_status
-            background: Rectangle { radius: 8; color: row.hovered || row.visualFocus ? themeState.hover : "transparent"; border.width: row.visualFocus ? 2 : 0; border.color: themeState.accent }
-            contentItem: RowLayout {
-                spacing: 12
-                Cover { Layout.preferredWidth: 44; Layout.preferredHeight: 44; artwork: row.modelData.artwork_url || "" }
-                ColumnLayout { Layout.fillWidth: true; Layout.minimumWidth: 0; spacing: 4; AppText { objectName: "trackTitle"; text: row.modelData.title; Layout.fillWidth: true } AppText { text: row.modelData.artist; color: themeState.secondary; font.pixelSize: 12; Layout.fillWidth: true } }
-                AppText { text: row.modelData.local_status === "ready" ? "Downloaded" : row.modelData.local_status; color: row.modelData.local_status === "ready" ? themeState.accent : themeState.secondary; font.pixelSize: 12; Layout.preferredWidth: 120 }
-                AppText { text: row.modelData.duration || "—"; color: themeState.secondary; font.pixelSize: 12; Layout.preferredWidth: 50 }
-                ThemeActionButton { text: row.modelData.local_status === "ready" ? "Open" : "Queue"; Layout.preferredWidth: 86; enabled: !appState.busy && row.modelData.local_status !== "unavailable"; onClicked: row.modelData.local_status === "ready" ? appState.openTrack(row.modelData.id) : appState.run("queue_track", {video_id:row.modelData.video_id}) }
+            background: Rectangle { radius: Theme.radiusSmall; color: row.hovered || row.visualFocus ? themeState.hover : "transparent"; border.width: row.visualFocus ? 2 : 0; border.color: themeState.accent }
+            contentItem: Item {
+                AppText { x: 8; width: 28; anchors.verticalCenter: parent.verticalCenter; text: row.index + 1; color: themeState.secondary; font.pixelSize: 13 }
+                Cover { x: 44; anchors.verticalCenter: parent.verticalCenter; width: 40; height: 40; artwork: row.modelData.artwork_url || "" }
+                Column { x: 96; width: parent.width - 250; anchors.verticalCenter: parent.verticalCenter; spacing: 4
+                    AppText { objectName: "trackTitle"; width: parent.width; text: row.modelData.title }
+                    AppText { width: parent.width; text: row.modelData.artist; font.pixelSize: 13; color: themeState.secondary }
+                }
+                AppText { anchors.right: download.left; anchors.rightMargin: 12; anchors.verticalCenter: parent.verticalCenter; text: row.modelData.duration || "—"; color: themeState.secondary; font.pixelSize: 13 }
+                IconButton {
+                    id: download; anchors.right: more.left; anchors.verticalCenter: parent.verticalCenter; width: 36; height: 36; iconSize: 20
+                    iconName: row.modelData.local_status === "ready" ? "check" : "download"
+                    iconColor: ["ready", "queued", "downloading"].indexOf(row.modelData.local_status) >= 0 ? themeState.accent : themeState.foreground
+                    disabledIconColor: iconColor
+                    tip: row.modelData.local_status === "ready" ? "Downloaded" : row.modelData.local_status === "queued" ? "Queued" : row.modelData.local_status === "downloading" ? "Downloading" : "Download"
+                    enabled: !appState.busy && ["ready", "unavailable", "queued", "downloading"].indexOf(row.modelData.local_status) < 0
+                    onClicked: appState.run("queue_track", {video_id:row.modelData.video_id})
+                }
+                IconButton { id: more; anchors.right: parent.right; anchors.verticalCenter: parent.verticalCenter; width: 36; height: 36; iconSize: 20; iconName: "more"; tip: "Song Options"; onClicked: { root.menuTrack = row.modelData; trackOptions.popup(this, width - trackOptions.implicitWidth, height, null) } }
             }
-            onClicked: trackList.currentIndex = index
-        }
-        ColumnLayout {
-            visible: root.rows.length === 0
-            anchors.centerIn: parent; width: Math.min(360, parent.width - 32); spacing: 14
-            Symbol { name: root.downloads ? "download" : "music"; Layout.alignment: Qt.AlignHCenter; width: 40; height: 40; color: themeState.secondary }
-            AppText { text: root.downloads ? "No downloads yet" : "Make room for your music"; font.pixelSize: 22; font.bold: true; Layout.alignment: Qt.AlignHCenter }
-            AppText { text: root.downloads ? "Queue a track or playlist to keep it on this device." : "Connect YouTube Music or import a public playlist to get started. If you’re searching, try another title or artist."; color: themeState.secondary; wrapMode: Text.WordWrap; elide: Text.ElideNone; horizontalAlignment: Text.AlignHCenter; Layout.fillWidth: true }
-            ThemeActionButton { text: "Import music"; primary: true; Layout.alignment: Qt.AlignHCenter; onClicked: appState.navigate("settings") }
+            onClicked: { songs.currentIndex = index; if (modelData.local_status === "ready") appState.openTrack(modelData.id) }
         }
     }
+    Column {
+        visible: root.rows ? songs.count === 0 : grid.count === 0
+        anchors.centerIn: parent; width: Math.min(380, parent.width - 80); spacing: 20
+        AppText { width: parent.width; text: appState.busy ? "Loading your library…" : appState.searchQuery ? "No songs match your search." : root.downloads ? "Your downloaded music will appear here." : "Import a playlist or connect YouTube Music to build your library."; color: themeState.secondary; wrapMode: Text.Wrap; elide: Text.ElideNone; horizontalAlignment: Text.AlignHCenter; font.pixelSize: 16 }
+        ThemeActionButton { anchors.horizontalCenter: parent.horizontalCenter; text: "Import Music"; visible: !appState.busy && !appState.searchQuery; onClicked: root.importMusic() }
+    }
+    ThemedMenu { id: libraryOptions
+        ContextMenuItem { text: "Import Music"; onTriggered: root.importMusic() }
+        ContextMenuItem { text: "Refresh"; enabled: !appState.busy; onTriggered: appState.refresh() }
+    }
+    ThemedMenu { id: collectionOptions
+        ContextMenuItem { text: "Download Playlist"; enabled: !appState.busy; onTriggered: appState.run("queue_playlist", {playlist_id:root.menuCollection.id}) }
+        ContextMenuItem { text: "Refresh Library"; enabled: !appState.busy; onTriggered: appState.refresh() }
+        ThemedMenuSeparator {}
+        ContextMenuItem { text: "Remove from Library"; enabled: !appState.busy && root.menuCollection.kind !== "unsorted"; onTriggered: root.removeCollection(root.menuCollection.id, root.menuCollection.title) }
+    }
+    ThemedMenu { id: trackOptions
+        ContextMenuItem { text: "Open Download"; enabled: root.menuTrack.local_status === "ready"; onTriggered: appState.openTrack(root.menuTrack.id) }
+        ContextMenuItem { text: "Download"; enabled: !appState.busy && root.menuTrack.local_status !== "unavailable"; onTriggered: appState.run("queue_track", {video_id:root.menuTrack.video_id}) }
+    }
+    Connections { target: appState; function onNavigationChanged() { songs.positionViewAtBeginning() } }
 }
