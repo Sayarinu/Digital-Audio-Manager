@@ -35,6 +35,8 @@ LEGACY_APP_NAME = "MP3 Maker"
 MAX_EXPORT_FILES = 8000
 MIN_FREE_BYTES = 20 * 1024 ** 3
 UNSORTED_COLLECTION_ID = "system:unsorted"
+LIBRARY_MANIFEST = "library.json"
+LIBRARY_MANIFEST_FORMAT = "digital-audio-manager.library"
 NODE_INDEX_URL = "https://nodejs.org/dist/index.json"
 YTDLP_RELEASE_URL = "https://github.com/yt-dlp/yt-dlp/releases/latest/download/"
 
@@ -166,6 +168,11 @@ def connect():
     columns = {row["name"] for row in con.execute("PRAGMA table_info(playlist)")}
     if "kind" not in columns:
         con.execute("ALTER TABLE playlist ADD COLUMN kind TEXT NOT NULL DEFAULT 'collection'")
+    # The size and modification time a checksum was taken at, so unchanged files are not hashed again.
+    columns = {row["name"] for row in con.execute("PRAGMA table_info(track)")}
+    for column in ("media_size", "media_mtime_ns"):
+        if column not in columns:
+            con.execute("ALTER TABLE track ADD COLUMN {} INTEGER".format(column))
     return con
 
 
@@ -181,6 +188,86 @@ def checksum(path):
         for chunk in iter(lambda: handle.read(1024 * 1024), b""):
             digest.update(chunk)
     return digest.hexdigest()
+
+
+def staging_path(destination):
+    """A hidden name beside destination, so a half-written file is never seen under its final name."""
+    destination = Path(destination)
+    return destination.with_name(".{}.{}.partial{}".format(destination.stem, uuid.uuid4().hex[:8], destination.suffix))
+
+
+def library_manifest_entries(con, root):
+    """Ready downloads inside root, with checksums cached against each file's size and modification time."""
+    root = root.resolve()
+    playlists = {}
+    for row in con.execute("""SELECT i.video_id, p.id, p.title, i.position FROM playlist_item i JOIN playlist p ON p.id=i.playlist_id
+                              ORDER BY p.title COLLATE NOCASE, p.id, i.position"""):
+        playlists.setdefault(row["video_id"], []).append({"id": row["id"], "title": row["title"], "position": row["position"]})
+    entries = []
+    rows = con.execute("""SELECT video_id, media_path, checksum, media_size, media_mtime_ns FROM track
+                          WHERE local_status='ready' AND media_path IS NOT NULL ORDER BY video_id""").fetchall()
+    for row in rows:
+        if not re.fullmatch(r"[A-Za-z0-9_-]{11}", row["video_id"]):
+            continue
+        path = Path(row["media_path"])
+        try:
+            stat = path.stat()
+            relative = path.resolve().relative_to(root)
+        except (OSError, ValueError):
+            continue
+        digest = row["checksum"]
+        if not digest or row["media_size"] != stat.st_size or row["media_mtime_ns"] != stat.st_mtime_ns:
+            try:
+                digest = checksum(path)
+            except OSError:
+                continue
+            con.execute("UPDATE track SET checksum=?, media_size=?, media_mtime_ns=? WHERE video_id=?",
+                        (digest, stat.st_size, stat.st_mtime_ns, row["video_id"]))
+        entries.append({"path": relative.as_posix(), "videoId": row["video_id"], "sha256": digest,
+                        "size": stat.st_size, "playlists": playlists.get(row["video_id"], [])})
+    return entries
+
+
+def write_library_manifest(con):
+    """Replace library.json atomically when the library's downloads or playlists changed.
+
+    It lists only paths, video ids, checksums, sizes and playlist positions: no account data or URLs.
+    """
+    if not music_folder_available():
+        return
+    root = library_root()
+    if not root.is_dir():
+        return
+    entries = library_manifest_entries(con, root)
+    con.commit()
+    target = root / LIBRARY_MANIFEST
+    try:
+        current = json.loads(target.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        current = None
+    if (isinstance(current, dict) and current.get("format") == LIBRARY_MANIFEST_FORMAT
+            and current.get("version") == 1 and current.get("entries") == entries):
+        return
+    document = {"format": LIBRARY_MANIFEST_FORMAT, "version": 1, "updated_at": utcnow(), "entries": entries}
+    staged = staging_path(target)
+    try:
+        with open(staged, "w", encoding="utf-8") as handle:
+            json.dump(document, handle, ensure_ascii=False, indent=2)
+            handle.write("\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(staged, target)
+    except BaseException:
+        staged.unlink(missing_ok=True)
+        raise
+
+
+def refresh_library_manifest(con):
+    """Keep library.json current without letting a read-only or busy folder break the caller."""
+    try:
+        write_library_manifest(con)
+    except (OSError, sqlite3.Error):
+        pass
 
 
 def find_tool(name, extra=None):
@@ -351,6 +438,7 @@ def dashboard(_payload=None):
     try:
         reconcile_files(con)
         con.commit()
+        refresh_library_manifest(con)
         playlists = [dict(row) for row in con.execute("""
           SELECT p.id, p.title, p.source, p.loaded, p.updated_at, p.kind, COUNT(i.video_id) AS track_count
           FROM playlist p LEFT JOIN playlist_item i ON p.id = i.playlist_id
@@ -953,38 +1041,49 @@ def run_download(track, session=None):
     metadata = resolved_track_metadata(track, info)
     target_track = {**dict(track), **metadata}
     artwork = prepare_artwork(work, ffmpeg)
-    if direct:
-        destination = build_output_path(target_track, "m4a")
-        if artwork and ffmpeg:
-            embedded = subprocess.run([ffmpeg, "-y", "-i", str(source), "-i", str(artwork), "-map", "0:a", "-map", "1:v",
-                                        "-c:a", "copy", "-c:v", "mjpeg", "-disposition:v:0", "attached_pic",
-                                        "-metadata", "title=" + metadata["title"], "-metadata", "artist=" + metadata["artist"], str(destination)], capture_output=True, text=True, timeout=600)
-            if embedded.returncode != 0:
-                shutil.move(str(source), str(destination))
+    destination = build_output_path(target_track, "m4a" if direct else "mp3")
+    # Every file is finished under a hidden name and renamed into place, so other apps never see it half-written.
+    staged = staging_path(destination)
+    cover = destination.with_suffix(".jpg")
+    staged_cover = staging_path(cover)
+    try:
+        if direct:
+            embedded = None
+            if artwork and ffmpeg:
+                embedded = subprocess.run([ffmpeg, "-y", "-i", str(source), "-i", str(artwork), "-map", "0:a", "-map", "1:v",
+                                            "-c:a", "copy", "-c:v", "mjpeg", "-disposition:v:0", "attached_pic",
+                                            "-metadata", "title=" + metadata["title"], "-metadata", "artist=" + metadata["artist"], str(staged)], capture_output=True, text=True, timeout=600)
+            if embedded is None or embedded.returncode != 0:
+                staged.unlink(missing_ok=True)
+                shutil.move(str(source), str(staged))
+            codec = ext
         else:
-            shutil.move(str(source), str(destination))
-        codec = ext
-    else:
-        if not ffmpeg:
-            raise WorkerError("The source is not an approved direct M4A/AAC file and ffmpeg is unavailable for MP3 fallback.")
-        destination = build_output_path(target_track, "mp3")
-        command = [ffmpeg, "-y", "-i", str(source)]
-        if artwork:
-            command += ["-i", str(artwork), "-map", "0:a", "-map", "1:v", "-c:v", "mjpeg", "-disposition:v:0"]
-        else:
-            command += ["-vn"]
-        command += ["-c:a", "libmp3lame", "-b:a", "320k", "-metadata", "title=" + metadata["title"], "-metadata", "artist=" + metadata["artist"], str(destination)]
-        converted = subprocess.run(command, capture_output=True, text=True, timeout=1800)
-        if converted.returncode != 0:
-            raise WorkerError(converted.stderr[-500:])
+            if not ffmpeg:
+                raise WorkerError("The source is not an approved direct M4A/AAC file and ffmpeg is unavailable for MP3 fallback.")
+            command = [ffmpeg, "-y", "-i", str(source)]
+            if artwork:
+                command += ["-i", str(artwork), "-map", "0:a", "-map", "1:v", "-c:v", "mjpeg", "-disposition:v:0", "attached_pic"]
+            else:
+                command += ["-vn"]
+            command += ["-c:a", "libmp3lame", "-b:a", "320k", "-metadata", "title=" + metadata["title"], "-metadata", "artist=" + metadata["artist"], str(staged)]
+            converted = subprocess.run(command, capture_output=True, text=True, timeout=1800)
+            if converted.returncode != 0:
+                raise WorkerError(converted.stderr[-500:])
+            codec = "mp3-320-cbr"
+        if staged.stat().st_size < 1024:
+            raise WorkerError("Downloaded file was implausibly small and was removed.")
+        digest = checksum(staged)
+        if artwork and artwork.is_file():
+            shutil.copy2(artwork, staged_cover)
+            os.replace(staged_cover, cover)
+        os.replace(staged, destination)
+    except BaseException:
+        staged.unlink(missing_ok=True)
+        staged_cover.unlink(missing_ok=True)
+        raise
+    if not direct:
         source.unlink(missing_ok=True)
-        codec = "mp3-320-cbr"
-    if destination.stat().st_size < 1024:
-        destination.unlink(missing_ok=True)
-        raise WorkerError("Downloaded file was implausibly small and was removed.")
-    if artwork and artwork.is_file():
-        shutil.copy2(artwork, destination.with_suffix(".jpg"))
-    return destination, codec, checksum(destination), metadata
+    return destination, codec, digest, metadata
 
 
 def run_queue(_payload=None, session=None):
@@ -1007,8 +1106,11 @@ def run_queue(_payload=None, session=None):
                 destination, codec, digest, metadata = run_download(job, session=session) if session else run_download(job)
                 cover = destination.with_suffix(".jpg")
                 artwork_url = cover.resolve().as_uri() if cover.is_file() else None
-                con.execute("UPDATE track SET title=?, artist=?, album=?, local_status='ready', media_path=?, source_codec=?, checksum=?, artwork_url=COALESCE(?, artwork_url), updated_at=? WHERE video_id=?",
-                            (metadata["title"], metadata["artist"], metadata["album"], str(destination), codec, digest, artwork_url, utcnow(), job["video_id"]))
+                stat = destination.stat()
+                con.execute("""UPDATE track SET title=?, artist=?, album=?, local_status='ready', media_path=?, source_codec=?, checksum=?,
+                               media_size=?, media_mtime_ns=?, artwork_url=COALESCE(?, artwork_url), updated_at=? WHERE video_id=?""",
+                            (metadata["title"], metadata["artist"], metadata["album"], str(destination), codec, digest,
+                             stat.st_size, stat.st_mtime_ns, artwork_url, utcnow(), job["video_id"]))
                 con.execute("UPDATE download_job SET state='completed', error_code=NULL, error_message=NULL, updated_at=? WHERE id=?", (utcnow(), job["id"]))
             except Exception as exc:
                 code, message = classify_error(str(exc))
@@ -1019,6 +1121,7 @@ def run_queue(_payload=None, session=None):
                     con.commit()
                     break
             con.commit()
+            refresh_library_manifest(con)
             completed += 1
             write_activity("Downloading", completed, total)
     finally:
