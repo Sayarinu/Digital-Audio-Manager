@@ -43,6 +43,7 @@ def main():
     QQuickStyle.setStyle("Basic")
     app = QApplication(sys.argv[:1])
     app.setApplicationName("Digital Audio Manager")
+    app.setDesktopFileName("digital-audio-manager")
     app.setOrganizationName("Nouvelle Lune Atelier")
     assets = Path(__file__).parent / "assets"
     for name in ("Roboto-Regular.ttf", "Roboto-Bold.ttf"):
