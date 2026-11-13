@@ -39,6 +39,21 @@ def test_standard_music_directory_and_legacy_library_are_respected(tmp_path, mon
     assert paths.default_library() == old
 
 
+@pytest.mark.parametrize('system', ['posix', 'nt'])
+def test_installed_wrapper_catalog_is_reused_on_linux_and_windows(tmp_path, monkeypatch, system):
+    from types import SimpleNamespace
+
+    monkeypatch.setattr(Path, 'home', lambda: tmp_path)
+    monkeypatch.setattr(paths, 'standard_location', lambda kind: tmp_path / 'native-data')
+    monkeypatch.setattr(paths, 'os', SimpleNamespace(name=system, environ={'APPDATA': str(tmp_path / 'roaming')}))
+    previous_base = tmp_path / ('roaming' if system == 'nt' else 'native-data')
+    for name in (paths.APP_NAME, 'MP3 Maker'):
+        previous = previous_base / name
+        previous.mkdir(parents=True)
+        (previous / 'mp3-maker.sqlite3').write_bytes(b'preserve existing catalog')
+        assert paths.data_directory() == previous
+
+
 def test_new_music_location_preserves_downloads_and_persists(library):
     engine.seed_demo()
     previous = engine.library_root() / "existing.m4a"

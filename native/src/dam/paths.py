@@ -24,7 +24,13 @@ def data_directory():
         legacy = Path.home() / "Library" / "Application Support" / name
         if (legacy / "mp3-maker.sqlite3").is_file():
             return legacy
-    return standard_location("GenericDataLocation") / APP_NAME
+    base = standard_location("GenericDataLocation")
+    previous_base = Path(os.environ.get("APPDATA", str(base))) if os.name == "nt" else base
+    for name in ("MP3 Maker", APP_NAME):
+        previous = previous_base / name
+        if (previous / "mp3-maker.sqlite3").is_file():
+            return previous
+    return base / APP_NAME
 
 
 def default_library():
