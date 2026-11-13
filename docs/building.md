@@ -41,7 +41,7 @@ Build on each target platform:
 python -m PyInstaller --noconfirm packaging/desktop.spec
 ```
 
-Output is under `dist/`: a macOS `.app` and a portable application directory on Windows/Linux. Keep the entire directory together. Linux builds require the target system's Qt platform libraries; build on the oldest supported distribution rather than copying a build from a newer libc system. macOS builds target the architecture of the machine running the build. Windows builds include an executable and its supporting files. The app includes Qt Multimedia’s decoder backend. Native audio checks decode generated silence without using speakers. Release archives are signed with an app-specific Ed25519 key; OS signing/notarization is not configured.
+Output is under `dist/`: a macOS `.app` and a portable application directory on Windows/Linux. Keep the entire directory together. Linux builds require the target system's Qt platform libraries and PulseAudio client library (`libpulse0` on Ubuntu); build on the oldest supported distribution rather than copying a build from a newer libc system. macOS builds target the architecture of the machine running the build. Windows builds include an executable and its supporting files. The app includes Qt Multimedia’s decoder backend. Native audio checks decode generated silence without using speakers. Release archives are signed with an app-specific Ed25519 key; OS signing/notarization is not configured.
 
 Qt's [PyInstaller deployment guide](https://doc.qt.io/qtforpython-6/deployment/deployment-pyinstaller.html) describes platform packaging. Folder defaults use [QStandardPaths](https://doc.qt.io/qtforpython-6/PySide6/QtCore/QStandardPaths.html), including localized Music folders.
 
