@@ -21,6 +21,19 @@ ApplicationWindow {
     palette.highlight: themeState.accent
     palette.highlightedText: themeState.onAccent
     property bool showQueue: false
+    property bool expanded: false
+    property var browseFocus: null
+    function setExpanded(value) {
+        if (value && !playerState.hasTrack || expanded === value) return
+        if (value) browseFocus = activeFocusItem
+        expanded = value
+        Qt.callLater(function() {
+            if (window.expanded) immersive.focusStage()
+            else if (window.browseFocus && window.browseFocus.visible && window.browseFocus.enabled) window.browseFocus.forceActiveFocus()
+            else statusBar.focusExpandToggle()
+        })
+    }
+    Connections { target: playerState; function onChanged() { if (!playerState.hasTrack) window.setExpanded(false) } }
     property real sidebarWidth: 240
     property string confirmOperation: ""
     property var confirmPayload: ({})
@@ -79,6 +92,7 @@ ApplicationWindow {
 
     Rectangle {
         id: sidebar
+        enabled: !window.expanded
         objectName: "navigationRail"
         width: Math.min(window.sidebarWidth, window.width - (queueDock.shown ? 780 : 480))
         anchors.top: parent.top; anchors.bottom: statusBar.top
@@ -130,6 +144,7 @@ ApplicationWindow {
     }
     Item {
         id: header
+        enabled: !window.expanded
         objectName: "mainHeader"
         anchors.left: sidebar.right; anchors.right: parent.right; anchors.rightMargin: queueDock.shown ? queueDock.width + 12 : 0
         height: 64
@@ -171,6 +186,7 @@ ApplicationWindow {
     }
     Item {
         id: pageArea
+        enabled: !window.expanded
         anchors.left: sidebar.right; anchors.right: parent.right; anchors.rightMargin: queueDock.shown ? queueDock.width + 12 : 0
         anchors.top: header.bottom; anchors.bottom: statusBar.top
         Rectangle {
@@ -204,8 +220,21 @@ ApplicationWindow {
             DevicePane { anchors.fill: parent; visible: appState.view === "device"; onChooseDevice: deviceFolder.open() }
         }
     }
+    ExpandedPlayer {
+        id: immersive
+        width: window.width; height: statusBar.y; z: 2
+        rightInset: queueDock.shown ? queueDock.width + 24 : 0
+        slidingInset: (queueDock.width + 24) * queueDock.revealed
+        property real slide: window.expanded ? 0 : 1
+        visible: window.expanded || immersiveSlide.running
+        enabled: window.expanded
+        transform: Translate { y: immersive.slide * immersive.height }
+        Behavior on slide { NumberAnimation { id: immersiveSlide; duration: Theme.duration(Theme.motionSlow, appState.reducedMotion); easing.type: window.expanded ? Easing.OutCubic : Easing.InCubic } }
+        onCloseRequested: window.setExpanded(false)
+    }
     DockPanel {
         id: queueDock
+        z: 3
         anchors.right: parent.right; anchors.rightMargin: 12; anchors.top: parent.top; anchors.topMargin: 12; anchors.bottom: statusBar.top; anchors.bottomMargin: 12
         width: 300; radius: Theme.radiusLarge; color: themeState.surface; border.color: themeState.border
         shown: window.showQueue && window.width >= 1100 && appState.view !== "queue"
@@ -213,12 +242,16 @@ ApplicationWindow {
     }
     PlayerBar {
         id: statusBar
+        z: 4
+        expanded: window.expanded
+        onExpandRequested: window.setExpanded(!window.expanded)
         objectName: "statusBar"
         anchors.left: parent.left; anchors.right: parent.right; anchors.bottom: parent.bottom; anchors.margins: 12
-        onImportRequested: importDialog.open()
-        onQueueRequested: { if (window.width >= 1100) window.showQueue = !window.showQueue; else appState.navigate("queue") }
+        onImportRequested: { window.setExpanded(false); importDialog.open() }
+        onQueueRequested: { if (window.width >= 1100) window.showQueue = !window.showQueue; else { window.setExpanded(false); appState.navigate("queue") } }
     }
     Rectangle {
+        z: 5
         anchors.horizontalCenter: parent.horizontalCenter; anchors.bottom: statusBar.top; anchors.bottomMargin: 16
         width: Math.min(540, window.width - 80); height: activityRow.implicitHeight + 20
         radius: Theme.radiusSmall; color: themeState.hover; visible: Boolean(appState.busy) || appState.queueRunning
@@ -227,7 +260,8 @@ ApplicationWindow {
             AppText { Layout.fillWidth: true; text: appState.data.activity ? appState.data.activity.label + (appState.data.activity.total ? " • " + appState.data.activity.completed + " / " + appState.data.activity.total : "") : appState.queueRunning ? "Downloading your music…" : "Working…" }
         }
     }
-    Shortcut { sequence: "Ctrl+F"; onActivated: search.forceActiveFocus() }
-    Shortcut { sequence: "Alt+Left"; onActivated: appState.back() }
+    Shortcut { sequence: "Ctrl+F"; onActivated: { window.setExpanded(false); search.forceActiveFocus() } }
+    Shortcut { sequence: "Alt+Left"; onActivated: window.expanded ? window.setExpanded(false) : appState.back() }
+    Shortcut { sequence: "Escape"; enabled: window.expanded; onActivated: window.setExpanded(false) }
     Component.onCompleted: if (appState.view === "settings") settingsDialog.open()
 }

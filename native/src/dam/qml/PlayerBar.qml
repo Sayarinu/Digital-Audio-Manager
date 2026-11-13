@@ -7,8 +7,20 @@ Rectangle {
     id: root
     signal queueRequested()
     signal importRequested()
+    signal expandRequested()
+    property bool expanded: false
+    function focusExpandToggle() { expandToggle.forceActiveFocus() }
     height: 92; radius: Theme.radiusMedium
     color: themeState.surface; border.color: themeState.border
+    MouseArea { objectName: "playerBarBackground"; anchors.fill: parent; z: -2; enabled: playerState.hasTrack; cursorShape: enabled ? Qt.PointingHandCursor : Qt.ArrowCursor; onClicked: root.expandRequested() }
+    ItemDelegate {
+        objectName: "playerTrackToggle"
+        x: 8; width: parent.width * 0.30 - 8; height: parent.height
+        enabled: playerState.hasTrack
+        Accessible.name: root.expanded ? "Return to Browsing" : "Open Immersive Player"
+        background: Rectangle { radius: Theme.radiusMedium; color: "transparent"; border.width: parent.visualFocus ? 2 : 0; border.color: themeState.accent }
+        onClicked: root.expandRequested()
+    }
     Cover { x: 16; y: 12; width: 68; height: 68; artwork: playerState.track.artwork_url || "" }
     Column { x: 96; anchors.verticalCenter: parent.verticalCenter; width: parent.width * 0.30 - 96; spacing: 5
         AppText { width: parent.width; text: playerState.track.title || "Nothing playing"; font.bold: true }
@@ -38,5 +50,6 @@ Rectangle {
         IconButton { objectName: "queueToggle"; iconName: "queue"; tip: "Download Queue"; onClicked: root.queueRequested() }
         IconButton { iconName: playerState.volume ? "volume" : "muted"; tip: playerState.volume ? "Mute" : "Unmute"; onClicked: playerState.setVolume(playerState.volume ? 0 : 0.7) }
         AccentSlider { anchors.verticalCenter: parent.verticalCenter; width: root.width < 1000 ? 60 : 80; height: 30; from: 0; to: 1; value: playerState.volume; Accessible.name: "Volume"; onMoved: playerState.setVolume(value) }
+        IconButton { id: expandToggle; objectName: "immersiveToggle"; iconName: root.expanded ? "down" : "up"; tip: root.expanded ? "Return to Browsing" : "Open Immersive Player"; enabled: playerState.hasTrack; onClicked: root.expandRequested() }
     }
 }

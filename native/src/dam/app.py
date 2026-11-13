@@ -27,7 +27,7 @@ def main():
     parser.add_argument("--smoke-test", action="store_true")
     parser.add_argument("--screenshot")
     parser.add_argument("--fixture", action="store_true")
-    parser.add_argument("--view", choices=["library", "downloads", "queue", "device", "settings", "collection", "search"], default="library")
+    parser.add_argument("--view", choices=["library", "downloads", "queue", "device", "settings", "collection", "search", "player"], default="library")
     parser.add_argument("--theme", default="classic-dark")
     parser.add_argument("--empty", action="store_true")
     parser.add_argument("--width", type=int, default=1280)
@@ -77,6 +77,8 @@ def main():
             state._remote_query = "Synthetic music"
             state._results = fixture["tracks"]
             state._sync_search()
+        if args.view == "player" and fixture["tracks"]:
+            player._queue, player._index = [fixture["tracks"][0]], 0
         if args.state == "loading":
             state._busy = "initialize"
         elif args.state == "error":
@@ -103,6 +105,8 @@ def main():
         maintenance.start()
     if synthetic and args.dialog:
         QTimer.singleShot(0, window.openAccount if args.dialog == "account" else window.openImport)
+    if synthetic and args.view == "player":
+        QTimer.singleShot(0, lambda: window.setExpanded(True))
 
     def shutdown():
         state.settings.setValue("windowWidth", window.width())

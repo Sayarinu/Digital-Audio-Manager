@@ -31,7 +31,7 @@ def main():
             print("Native audio decoder failed: " + audio.stderr, file=sys.stderr)
             return 1
         for width, height in ((1280, 820), (920, 620), (1600, 900)):
-            for view in ("library", "downloads", "queue", "device", "settings", "collection", "search"):
+            for view in ("library", "downloads", "queue", "device", "settings", "collection", "search", "player"):
                 target = Path(directory) / f"{view}-{width}.png"
                 result = subprocess.run([*command, "--smoke-test", "--view", view,
                                          "--width", str(width), "--height", str(height),
@@ -49,7 +49,7 @@ def main():
             if result.returncode or not target.is_file() or "file:" in result.stderr or "failed to load" in result.stderr:
                 print(f"Native dialog/state check failed: {options}\n{result.stderr}", file=sys.stderr)
                 return 1
-        print("Native render checks passed: 7 views at 3 sizes, dialogs, loading, empty and error states.")
+        print("Native render checks passed: 8 views at 3 sizes, dialogs, loading, empty and error states.")
     return 0
 
 

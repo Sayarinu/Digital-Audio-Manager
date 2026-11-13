@@ -158,11 +158,36 @@ def main():
         update_ms = (time.perf_counter() - start) * 1000
         assert songs.property("contentY") == position
         assert state.trackModel.rowCount() == 8000
+        player._queue, player._index = [fixture["tracks"][0]], 0
+        player.changed.emit()
+        click("playerTrackToggle")
+        QTest.qWait(320)
+        assert window.property("expanded")
+        assert find("expandedPlayer").isVisible()
+        assert find("immersiveTrackTitle").property("text") == fixture["tracks"][0]["title"]
+        click("playPauseButton")
+        assert window.property("expanded")  # Playback controls must not toggle the surrounding view.
+        player._queue[0] = dict(player._queue[0], title="The next local song")
+        player.changed.emit()
+        assert find("immersiveTrackTitle").property("text") == "The next local song"
+        QTest.keyClick(window, Qt.Key.Key_Escape)
+        QTest.qWait(320)
+        assert not window.property("expanded") and songs.property("contentY") == position
+        click("immersiveToggle")
+        QTest.qWait(320)
+        click("closeExpandedPlayer")
+        QTest.qWait(320)
+        assert not window.property("expanded")
         click("queueToggle")
         QTest.qWait(300)
         state.setReducedMotion(True)
         click("queueToggle")
         QTest.qWait(50)
+        click("playerTrackToggle")
+        assert window.property("expanded")
+        assert find("expandedPlayer").property("slide") == 0
+        player.close()
+        assert not window.property("expanded")
         assert not warnings, "\n".join(warnings)
         print(json.dumps({"settings_open_median_ms": round(statistics.median(timings), 2),
                           "update_8000_rows_ms": round(update_ms, 2), "scroll_preserved": True}))

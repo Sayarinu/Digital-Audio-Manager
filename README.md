@@ -18,7 +18,7 @@ A native desktop library and download manager for Windows, macOS and Linux, with
 ## Features
 
 - **A familiar native interface.** Tubify's Classic and Midnight Violet palettes, other theme presets, Roboto typography, playlist navigation, search and a floating player and download queue dock. Built with PySide6 and QML.
-- **Search and playback.** Search YouTube Music from the top bar and queue the exact song. Play local/downloaded music inside the app with artwork, seek, volume and next/previous controls. Import other audio files or folders in place with their tags and embedded covers.
+- **Search and playback.** Search YouTube Music from the top bar and queue the exact song. Play local/downloaded music inside the app with artwork, seek, volume and next/previous controls. Click the player artwork, song details or up-chevron to open the immersive player; Escape returns to browsing. Import other audio files or folders in place with their tags and embedded covers.
 - **Your YouTube Music account.** Connect through your browser or import a local `browser.json` export. Sessions use the OS keyring, with validation, renewal, reconnect and sign-out. Credentials are independent from Tubify.
 - **Public imports too.** Import a playlist or album into Unsorted, or sync a public profile without signing in. Connected accounts can sync their library playlists.
 - **Exact-video downloads.** Durable queue, retry, cancellation, metadata and artwork. The app keeps M4A/AAC where possible and uses 320 kbps MP3 as a compatibility fallback. It never substitutes a search result for the requested video.
