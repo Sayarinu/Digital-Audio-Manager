@@ -1,0 +1,42 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "digital-audio-manager"
+version = "1.0.1"
+description = "Native music download and device library manager"
+requires-python = ">=3.12"
+license = "MIT"
+license-files = ["LICENSE"]
+dependencies = [
+  "PySide6-Essentials==6.12.0",
+  "keyring==25.7.0",
+  "ytmusicapi==1.12.3",
+  "yt-dlp[default]==2026.10.26",
+  "pyobjc-framework-Cocoa>=11; sys_platform == 'darwin'",
+]
+
+[project.optional-dependencies]
+test = ["pytest>=8", "ruff>=0.11"]
+build = ["pyinstaller>=6.10"]
+
+[project.scripts]
+digital-audio-manager = "dam.launcher:main"
+
+[tool.setuptools.packages.find]
+where = ["native/src"]
+
+[tool.setuptools.package-data]
+dam = ["qml/*.qml", "qml/*.js", "qml/components/*.qml", "assets/*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["native/src"]
+
+[tool.ruff]
+target-version = "py312"
+line-length = 120
+
+[tool.ruff.lint]
+select = ["E4", "E7", "E9", "F"]

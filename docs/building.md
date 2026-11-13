@@ -1,73 +1,50 @@
-# Building from source
+# Building the native app
 
-Digital Audio Manager is a [Tauri 2](https://tauri.app) app: a React and TypeScript interface, a thin Rust shell, and a Python worker that does the importing, downloading and device syncing.
+Digital Audio Manager uses Python, PySide6 Essentials and Qt Quick/QML, matching Tubify's native stack. Python 3.12 or later is required for source installs; CI uses Python 3.14. Packaged apps include Python and Qt.
 
-## Prerequisites
-
-- **Node.js 22** and **pnpm 10** (CI uses these versions; pnpm 11 stops on the lockfile's ignored build scripts)
-- **Rust** stable, via [rustup](https://rustup.rs)
-- **Python 3** (CI uses 3.12) with `pip`
-- **FFmpeg** on your PATH, for MP3 conversion, cover art and device syncs
-- The [Tauri system dependencies](https://tauri.app/start/prerequisites/) for your platform. On Debian or Ubuntu:
-
-  ```sh
-  sudo apt-get install -y libwebkit2gtk-4.1-dev build-essential libssl-dev libgtk-3-dev \
-    libayatana-appindicator3-dev librsvg2-dev patchelf libfuse2 file
-  ```
-
-## Set up
+## Development
 
 ```sh
-pnpm install --frozen-lockfile
-python3 -m pip install --target python/vendor -r python/requirements.txt
+python -m venv .venv
+# Linux/macOS:
+. .venv/bin/activate
+# Windows PowerShell: .venv\Scripts\Activate.ps1
+python -m pip install -e '.[test,build]'
+digital-audio-manager
 ```
 
-`python/vendor` holds the worker's Python dependencies. It is git-ignored and bundled into the app, and the Rust build fails until it exists.
+For the exact CI environment, install `uv==0.12.5` and run `uv sync --locked --extra test --extra build`; `uv.lock` pins dependencies for every supported platform.
 
-Optionally copy `.env.example` to `.env` and set `VITE_DEFAULT_PROFILE_URL` to prefill the profile field in Settings.
+Install FFmpeg and ffprobe through your platform's package manager. Node.js is used by the downloader; Settings → Set up tools installs a managed Node runtime if none is available. yt-dlp and its JavaScript support are bundled Python dependencies. This app does not run a development server.
 
-## Run in development
+For isolated development, set `MP3_MAKER_APP_DATA` and `MP3_MAKER_LIBRARY` to temporary folders. The explicit library override disables the folder chooser. Existing installations keep their previous catalog and downloads automatically.
+
+## Checks and previews
 
 ```sh
-pnpm tauri dev
+python -m ruff check native/src tests scripts
+python -m pytest -q
+python scripts/check_native.py
+python -m dam --fixture
+python -m dam --smoke-test --view settings --width 920 --height 620 --screenshot /tmp/settings.png
 ```
 
-This starts Vite on `http://localhost:1420` and opens the app. In development the Rust shell runs `python/worker.py` straight from the repository, so worker changes apply on the next action without a rebuild.
+`--fixture` and `--smoke-test` use synthetic data and temporary paths, without loading credentials or reading browser sessions. `--theme youtube-music-purple` selects Tubify's Midnight Violet theme for a synthetic preview; `--empty` renders empty states. `check_native.py` exercises every page at all three supported test sizes and fails on QML runtime errors.
 
-To keep test data away from your real library, point the worker at other folders:
+The test suite checks the retained worker, account/keyring lifecycle, provider transport, path compatibility, download destination selection and failure recovery. It does not replace real-browser sign-in, authenticated download or mounted-device checks. Test those on Windows, macOS and Linux before release, keeping credentials and private account screenshots outside the repository.
+
+## Desktop packages
+
+Build on each target platform:
 
 ```sh
-MP3_MAKER_APP_DATA=/tmp/dam-data MP3_MAKER_LIBRARY=/tmp/dam-library pnpm tauri dev
+python -m PyInstaller --noconfirm packaging/desktop.spec
 ```
 
-## Verify
+Output is under `dist/`: a macOS `.app` and a portable application directory on Windows/Linux. Keep the entire directory together. Linux builds require the target system's Qt platform libraries; build on the oldest supported distribution rather than copying a build from a newer libc system. macOS builds target the architecture of the machine running the build. Windows builds include an executable and its supporting files. These are unsigned native packages, with no updater.
 
-These are the checks CI runs:
+Qt's [PyInstaller deployment guide](https://doc.qt.io/qtforpython-6/deployment/deployment-pyinstaller.html) describes platform packaging. Folder defaults use [QStandardPaths](https://doc.qt.io/qtforpython-6/PySide6/QtCore/QStandardPaths.html), including localized Music folders.
 
-```sh
-PYTHONPYCACHEPREFIX=/tmp/dam-pycache python3 -m unittest discover -s tests -v
-pnpm run build
-cargo check --manifest-path src-tauri/Cargo.toml
-```
+## Releases
 
-## Build installers
-
-Tauri builds installers for the platform you build on. Pass the bundle types the release workflow uses:
-
-```sh
-pnpm tauri build --bundles app,dmg        # macOS
-pnpm tauri build --bundles msi,nsis       # Windows
-pnpm tauri build --bundles appimage,deb   # Linux
-```
-
-On macOS, add `--target aarch64-apple-darwin` or `--target x86_64-apple-darwin` (after `rustup target add` for it) to build for a specific architecture. Output goes to `src-tauri/target/release/bundle/` (or `src-tauri/target/<target>/release/bundle/`).
-
-`pnpm build:desktop` runs `tauri build` with the default bundle setting from `tauri.conf.json`, which only produces the macOS `.app`.
-
-## Releasing
-
-1. Bump the version in `package.json`, `src-tauri/Cargo.toml`, `src-tauri/Cargo.lock` and `src-tauri/tauri.conf.json`.
-2. Merge the change into `main`.
-3. Push a tag such as `v1.0.2`. The **Release desktop builds** workflow builds every platform and publishes a GitHub release with the installers.
-
-Releases are unsigned, and there is no in-app updater, so no signing or updater secrets are needed.
+PR and main CI build and check native packages on Windows, macOS and Linux. Tag releases archive those native builds as ZIPs; they do not produce the old web-wrapper installers. A maintainer updates `pyproject.toml`, completes real-account/platform checks and pushes a `v*` tag. Publication waits for all platform package jobs to succeed. No release is created by ordinary branch work.

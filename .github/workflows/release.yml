@@ -1,4 +1,4 @@
-name: Release desktop builds
+name: Release native desktop builds
 
 on:
   push:
@@ -8,77 +8,57 @@ permissions:
   contents: write
 
 jobs:
-  release-macos:
+  package:
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - target: aarch64-apple-darwin
-          - target: x86_64-apple-darwin
-    runs-on: macos-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: pnpm/action-setup@v4
-        with:
-          version: 10
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 22
-          cache: pnpm
-      - uses: actions/setup-python@v5
-        with:
-          python-version: '3.12'
-      - name: Install macOS Rust target
-        run: rustup target add ${{ matrix.target }}
-      - run: pnpm install --frozen-lockfile
-      - run: python -m pip install --target python/vendor -r python/requirements.txt
-      - uses: tauri-apps/tauri-action@v1
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          tagName: ${{ github.ref_name }}
-          releaseName: Digital Audio Manager ${{ github.ref_name }}
-          releaseBody: Desktop builds for macOS, Windows, and Linux.
-          releaseDraft: false
-          prerelease: false
-          args: --bundles app,dmg --target ${{ matrix.target }}
-
-  release-other-platforms:
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - os: windows-latest
-            bundles: msi,nsis
-          - os: ubuntu-22.04
-            bundles: appimage,deb
+        os: [ubuntu-24.04, windows-latest, macos-latest]
     runs-on: ${{ matrix.os }}
+    env:
+      QT_QPA_PLATFORM: offscreen
+      QT_QUICK_BACKEND: software
     steps:
       - uses: actions/checkout@v4
-      - uses: pnpm/action-setup@v4
-        with:
-          version: 10
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 22
-          cache: pnpm
       - uses: actions/setup-python@v5
         with:
-          python-version: '3.12'
-      - name: Install Linux build dependencies
+          python-version: '3.14'
+      - name: Install Linux Qt runtime libraries
         if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libegl1 libopengl0 libxkbcommon0 libxcb-cursor0
+      - run: python -m pip install uv==0.12.5
+      - run: uv sync --locked --extra test --extra build
+      - run: uv run --no-sync python -m pytest -q
+      - run: uv run --no-sync python scripts/check_native.py
+      - run: uv run --no-sync python -m PyInstaller --noconfirm packaging/desktop.spec
+      - name: Check packaged Linux and Windows app
+        if: runner.os != 'macOS'
+        shell: bash
         run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends libwebkit2gtk-4.1-dev build-essential libssl-dev libgtk-3-dev libayatana-appindicator3-dev librsvg2-dev patchelf libfuse2 file
-      - run: pnpm install --frozen-lockfile
-      - run: python -m pip install --target python/vendor -r python/requirements.txt
-      - uses: tauri-apps/tauri-action@v1
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          if [ "$RUNNER_OS" = Windows ]; then
+            uv run --no-sync python scripts/check_native.py "dist/Digital Audio Manager/Digital Audio Manager.exe"
+          else
+            uv run --no-sync python scripts/check_native.py "dist/Digital Audio Manager/Digital Audio Manager"
+          fi
+      - name: Check packaged macOS app
+        if: runner.os == 'macOS'
+        run: uv run --no-sync python scripts/check_native.py "dist/Digital Audio Manager.app/Contents/MacOS/Digital Audio Manager"
+      - name: Archive platform build
+        shell: bash
+        run: |
+          python -c "import shutil; shutil.make_archive('Digital-Audio-Manager-${{ runner.os }}-${{ runner.arch }}', 'zip', 'dist')"
+      - uses: actions/upload-artifact@v4
         with:
-          tagName: ${{ github.ref_name }}
-          releaseName: Digital Audio Manager ${{ github.ref_name }}
-          releaseBody: Desktop builds for macOS, Windows, and Linux.
-          releaseDraft: false
-          prerelease: false
-          args: --bundles ${{ matrix.bundles }}
+          name: native-${{ runner.os }}-${{ runner.arch }}
+          path: Digital-Audio-Manager-*.zip
+  publish:
+    needs: package
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: artifacts/*.zip
+          generate_release_notes: true

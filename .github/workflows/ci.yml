@@ -1,7 +1,9 @@
-name: CI
+name: Native checks
 
 on:
   push:
+    branches: [main]
+  pull_request:
     branches: [main]
 
 permissions:
@@ -9,25 +11,41 @@ permissions:
 
 jobs:
   verify:
-    runs-on: ubuntu-22.04
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    env:
+      QT_QPA_PLATFORM: offscreen
+      QT_QUICK_BACKEND: software
     steps:
       - uses: actions/checkout@v4
-      - uses: pnpm/action-setup@v4
-        with:
-          version: 10
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 22
-          cache: pnpm
       - uses: actions/setup-python@v5
         with:
-          python-version: '3.12'
-      - name: Install Linux build dependencies
+          python-version: '3.14'
+      - name: Install Linux Qt runtime libraries
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libegl1 libopengl0 libxkbcommon0 libxcb-cursor0
+      - run: python -m pip install uv==0.12.5
+      - run: uv sync --locked --extra test --extra build
+      - run: uv run --no-sync python -m ruff check native/src tests scripts
+      - run: uv run --no-sync python -m pytest -q
+      - run: uv run --no-sync python scripts/check_native.py
+      - run: uv run --no-sync python -m PyInstaller --noconfirm packaging/desktop.spec
+      - name: Check packaged Linux and Windows app
+        if: runner.os != 'macOS'
+        shell: bash
         run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends libwebkit2gtk-4.1-dev build-essential libssl-dev libgtk-3-dev libayatana-appindicator3-dev librsvg2-dev patchelf libfuse2 file
-      - run: pnpm install --frozen-lockfile
-      - run: python -m pip install --target python/vendor -r python/requirements.txt
-      - run: PYTHONPYCACHEPREFIX=/tmp/dam-pycache python -m unittest discover -s tests -v
-      - run: pnpm run build
-      - run: cargo check --manifest-path src-tauri/Cargo.toml
+          if [ "$RUNNER_OS" = Windows ]; then
+            uv run --no-sync python scripts/check_native.py "dist/Digital Audio Manager/Digital Audio Manager.exe"
+          else
+            uv run --no-sync python scripts/check_native.py "dist/Digital Audio Manager/Digital Audio Manager"
+          fi
+      - name: Check packaged macOS app
+        if: runner.os == 'macOS'
+        run: uv run --no-sync python scripts/check_native.py "dist/Digital Audio Manager.app/Contents/MacOS/Digital Audio Manager"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: native-${{ runner.os }}-${{ runner.arch }}
+          path: dist/

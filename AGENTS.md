@@ -1,57 +1,41 @@
-# Repository guide
+# Repository workflow
 
-## Stack
+- Read the [native migration issue in Linear](https://linear.app/nouvelle-lune-atelier/issue/LUNE-625/replace-the-web-wrapper-with-a-tubify-style-native-desktop-app) for this app's scope and acceptance gates. [Tubify's native specification and QoL roadmap](https://linear.app/nouvelle-lune-atelier/issue/LUNE-367/publish-native-qol-roadmap-and-revised-player-specification) is the source for shared design and session behavior.
+- Every implementation task needs its actual assigned LUNE issue before code work starts.
+- Fetch origin and branch from origin/main. Branch names are exactly the issue identifier, for example `LUNE-625`; no descriptive suffixes or `agent/*` branches. One issue gets one branch and one PR targeting main.
+- Commit subjects are `LUNE-XXX - Change-specific message`, describing the individual change in the imperative. Commit with the GitHub noreply email address; check `git config user.email` in each clone.
+- Do not add AI tool attribution: no `Co-Authored-By` trailers, "Generated with" lines or tool mentions in commits, PR descriptions, code, comments or docs.
+- Merge PRs with a merge commit only after the issue is complete, review concerns are resolved and required checks pass for the current head. Stop at a reviewable, green PR unless the owner asks to merge. Do not push directly to main.
+- This app retains maintainer-created `v*` releases. Tubify's automatic experimental/stable publishing, signing and updater infrastructure are not installed here. Do not add them without an issue requesting them. Only maintainers tag, after updating the version in `pyproject.toml`.
 
-- **UI:** React 18 and TypeScript, built with Vite (`src/`)
-- **Shell:** Tauri 2 in Rust (`src-tauri/`)
-- **Worker:** Python 3 standard library plus vendored [ytmusicapi](https://github.com/sigma67/ytmusicapi) (`python/`), driving `yt-dlp`, Node.js and FFmpeg, with state in SQLite
-- **Package manager:** pnpm 10
+## Native architecture
 
-## Layout
+- Native-only Python/PySide6 and Qt Quick/QML. Do not reintroduce a web wrapper, React, Rust shell or web build toolchain.
+- `native/src/dam/app.py` launches the native shell; `state.py` exposes view state and dispatches jobs. QML lives under `native/src/dam/qml/`.
+- `engine.py` owns SQLite, public imports, exact-video downloads and device sync. `provider.py` dispatches the private process protocol; `jobs.py` handles asynchronous process transport. Keep network, extraction and database work off the GUI thread. No network listener.
+- `account/` carries Tubify's session parsing, browser import, OS keyring, account validation and reconnect lifecycle. `theme.py`, QML theme tokens and shared controls carry its design language. Keep ports compatible and retain upstream license notices in `assets/`.
+- Keep small interfaces between account, catalog/download work and views. QML receives normalized application data, never cookies, request headers, raw provider responses or signed media URLs.
+- Session storage uses `studio.nouvellelune.digitalaudiomanager`; never read, overwrite or delete Tubify's vault entries. Browser reading happens only for explicit connection or renewal of a remembered connection. Sign-out must forget that browser and stop silent reconnection. A rejected replacement must preserve the working session.
+- Keep shared code portable across Windows, macOS and Linux. Use Qt standard paths; isolate OS integrations and packaging. Local browsing and downloaded files must remain available without a network connection or unlocked keyring.
+- New libraries use the system Music folder inside `Digital Audio Manager/Library`. Selecting another Music folder affects future downloads; preserve existing absolute file references. Device exports write only inside `<selected folder>/Digital Audio Manager`, retaining staged verification, the manifest and the 8,000-file guard.
+- Preserve `MP3_MAKER_*`, `mp3-maker.sqlite3` and existing legacy folders. Schema changes belong in `connect()` and upgrade existing databases in place. Never silently move, reset or delete existing libraries.
+- Download the exact track video ID, never a search substitute. Credentials stay in the worker and secure OS vault, never in download arguments or temporary cookie files.
+- Declare runtime dependencies in `pyproject.toml` and keep `uv.lock` current; CI installs it with `uv sync --locked`. Use standard-library tools where they suffice. Keep changes focused; avoid placeholder integrations, speculative abstractions and duplicate state.
 
-- `src/App.tsx`: the whole interface (Library, Queue, Device and Settings views)
-- `src/api.ts`, `src/types.ts`: typed calls into the shell and the worker's response shapes
-- `src-tauri/src/lib.rs`: Tauri commands; finds and launches the worker, runs the download queue on a background thread, opens the library folder
-- `src-tauri/tauri.conf.json`: app metadata, window and bundled resources (`python/worker.py`, `python/vendor`)
-- `python/worker.py`: every operation (imports, queue, downloads, metadata repair, device sync, tool setup)
-- `tests/test_worker.py`: worker unit tests
-- `docs/building.md`: development setup, installers and releases
-- `.github/workflows/`: `ci.yml` (push to main) and `release.yml` (`v*` tags)
+## Design and verification
 
-## Commands
+- Match Tubify's semantic theme roles, bundled Roboto, pill actions, consistent spacing/radii, artwork-led headers and virtualized lists. Do not hardcode page-specific palettes. Keep visible keyboard focus, useful empty/error states, reduced-motion support and a 920×620 minimum.
+- Tests use temporary folders through `MP3_MAKER_APP_DATA` and `MP3_MAKER_LIBRARY`. Patch provider calls, browser readers and keyrings; tests must not contact accounts or networks.
+- Run before a PR:
 
 ```sh
-pnpm install --frozen-lockfile
-python3 -m pip install --target python/vendor -r python/requirements.txt   # required before any Rust build
-pnpm tauri dev                                                              # run the app
-pnpm run build                                                              # type-check and build the UI
-PYTHONPYCACHEPREFIX=/tmp/dam-pycache python3 -m unittest discover -s tests -v
-cargo check --manifest-path src-tauri/Cargo.toml
-pnpm tauri build --bundles appimage,deb                                     # installers; see docs/building.md per platform
+python -m pip install -e '.[test,build]'
+python -m ruff check native/src tests scripts
+python -m pytest -q
+python scripts/check_native.py
+python -m PyInstaller --noconfirm packaging/desktop.spec
 ```
 
-Run the Python tests, the UI build and `cargo check` before opening a PR. CI only runs on pushes to `main`, not on pull requests.
-
-## Architecture rules
-
-- All work happens in the Python worker. The UI calls the `worker_command` Tauri command with a method name and payload; the shell runs `worker.py` once per call, passing the request as JSON in `MP3_MAKER_REQUEST`, and returns `{"ok": true, "data": ...}` or `{"ok": false, "error": ...}`. Add new operations to `OPERATIONS` in `worker.py` and a matching wrapper in `src/api.ts`.
-- Operations that change state return `dashboard()` so the UI can replace its state in one step. Raise `WorkerError` with a sentence a user can act on; anything else is reported as an unexpected error.
-- Keep the Rust shell thin: process launching, the background queue thread and OS integration only. No business logic in Rust.
-- The worker opens no network listener, never signs in and never reads browser cookies. It reads public data only and downloads the exact video ID for each track, never a search substitute.
-- Device syncs only write inside `<volume>/Digital Audio Manager`. Keep the stage, verify and swap flow, the manifest and the 8,000-file guard.
-- Keep the legacy "MP3 Maker" names (`MP3_MAKER_*` variables, `mp3-maker.sqlite3`, the legacy folders) unless you add a migration; existing libraries depend on them.
-- Schema changes go in `connect()` and must upgrade existing databases in place (see the `kind` column).
-- The worker stays standard-library only apart from `python/requirements.txt`, which is vendored and bundled. Pin new dependencies there.
-- The app is unsigned and has no auto-updater; don't reintroduce either without an issue that asks for it.
-- Tests use temporary folders through `MP3_MAKER_APP_DATA` and `MP3_MAKER_LIBRARY` and must not touch the network; patch `YTMusic`, `ytdlp_public_json` and similar calls.
-
-## Branches, commits and pull requests
-
-- Every change needs an issue in your tracker first. The branch name is exactly its key, such as `ABC-123`.
-- Branch from `main`, one issue per branch and one PR per issue, targeting `main`.
-- Commit subjects are `ABC-123 - Change-specific message`: imperative, describing that commit's change rather than repeating the issue title.
-- Commit with your GitHub noreply email address, never a personal one. Check `git config user.email` in each new clone.
-- Do not add AI tool attribution anywhere: no `Co-Authored-By` trailers, "Generated with" lines or tool mentions in commits, PR descriptions, code, comments or docs.
-- PRs are merged with a merge commit (not squash or rebase) once the checks above pass and review is resolved.
-- Pushing a `v*` tag runs the release workflow and publishes a public GitHub release, so only maintainers tag, after bumping the version in `package.json`, `src-tauri/Cargo.toml`, `src-tauri/Cargo.lock` and `src-tauri/tauri.conf.json`.
-- Keep downloaded media, local databases, cookies and personal profile URLs out of commits, logs and issues.
+- CI runs those checks on pull requests and main for Windows, macOS and Linux, including packaged launch/render checks. Inspect synthetic renders at 920×620, 1280×820 and 1600×900; include loading, empty and error cases for UI changes.
+- Keep real-account and real-device verification separate from fixtures. A passing fixture suite is not evidence of browser/keyring interoperability, authenticated downloads or device behavior on another OS. Record those gates honestly before release.
+- Keep browser sessions, cookies, private screenshots, account data, downloaded media, local databases and personal profile URLs out of commits, logs and Linear tickets.

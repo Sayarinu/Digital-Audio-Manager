@@ -1,0 +1,142 @@
+{
+  "playlists": [
+    {
+      "id": "preview:1",
+      "title": "On repeat",
+      "kind": "collection",
+      "source": "YouTube Music",
+      "loaded": true,
+      "track_count": 6
+    },
+    {
+      "id": "preview:2",
+      "title": "Weekend escapes",
+      "kind": "collection",
+      "source": "YouTube Music",
+      "loaded": false,
+      "track_count": 0
+    },
+    {
+      "id": "preview:3",
+      "title": "Deep focus",
+      "kind": "collection",
+      "source": "YouTube Music",
+      "loaded": false,
+      "track_count": 0
+    }
+  ],
+  "tracks": [
+    {
+      "id": "0",
+      "video_id": "fixture0",
+      "playlist_id": "preview:1",
+      "position": 1,
+      "title": "Late night drive",
+      "artist": "Night Drive",
+      "album": "On repeat",
+      "duration": "4:12",
+      "artwork_url": null,
+      "local_status": "ready",
+      "media_path": null
+    },
+    {
+      "id": "1",
+      "video_id": "fixture1",
+      "playlist_id": "preview:1",
+      "position": 2,
+      "title": "A little closer",
+      "artist": "Mira Coast",
+      "album": "On repeat",
+      "duration": "3:28",
+      "artwork_url": null,
+      "local_status": "ready",
+      "media_path": null
+    },
+    {
+      "id": "2",
+      "video_id": "fixture2",
+      "playlist_id": "preview:1",
+      "position": 3,
+      "title": "After the rain",
+      "artist": "The Sunday Hours",
+      "album": "On repeat",
+      "duration": "5:01",
+      "artwork_url": null,
+      "local_status": "ready",
+      "media_path": null
+    },
+    {
+      "id": "3",
+      "video_id": "fixture3",
+      "playlist_id": "preview:1",
+      "position": 4,
+      "title": "Golden hour",
+      "artist": "June & August",
+      "album": "On repeat",
+      "duration": "3:46",
+      "artwork_url": null,
+      "local_status": "ready",
+      "media_path": null
+    },
+    {
+      "id": "4",
+      "video_id": "fixture4",
+      "playlist_id": "preview:1",
+      "position": 5,
+      "title": "Everything in its place",
+      "artist": "Northbound",
+      "album": "On repeat",
+      "duration": "4:08",
+      "artwork_url": null,
+      "local_status": "queued",
+      "media_path": null
+    },
+    {
+      "id": "5",
+      "video_id": "fixture5",
+      "playlist_id": "preview:1",
+      "position": 6,
+      "title": "Slow mornings",
+      "artist": "Daybreak Club",
+      "album": "On repeat",
+      "duration": "2:57",
+      "artwork_url": null,
+      "local_status": "queued",
+      "media_path": null
+    }
+  ],
+  "jobs": [
+    {
+      "id": "job4",
+      "video_id": "fixture4",
+      "title": "Everything in its place",
+      "artist": "Northbound",
+      "state": "queued",
+      "attempts": 0,
+      "error_message": null
+    },
+    {
+      "id": "job5",
+      "video_id": "fixture5",
+      "title": "Slow mornings",
+      "artist": "Daybreak Club",
+      "state": "queued",
+      "attempts": 0,
+      "error_message": null
+    }
+  ],
+  "health": {
+    "library_root": "Music/Digital Audio Manager/Library",
+    "dependencies": {
+      "ffmpeg": {
+        "available": true
+      },
+      "yt_dlp": {
+        "available": true
+      },
+      "node": {
+        "available": true
+      }
+    }
+  }
+}
