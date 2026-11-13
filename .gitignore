@@ -1,9 +1,14 @@
-node_modules/
+.venv/
 dist/
-src-tauri/target/
-.env
+build/
+*.egg-info/
 __pycache__/
 *.pyc
-python/vendor/
-.pnpm-store/
+.pytest_cache/
+.ruff_cache/
+.env
 .DS_Store
+*.sqlite3
+
+# Stamped only in release builds.
+native/src/dam/assets/build-version.txt

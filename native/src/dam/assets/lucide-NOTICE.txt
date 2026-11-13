@@ -1,0 +1,8 @@
+Lucide icons
+https://lucide.dev/
+Source: https://github.com/lucide-icons/lucide/tree/02eb9161b57917ccaa262f1bf070507cddde3b08/icons
+
+Selected SVG files are embedded verbatim in qml/Icons.js, with app-name to
+upstream-filename mapping in its header. Symbol.qml substitutes currentColor
+at rendering time. No runtime downloads or new dependencies are required.
+License: see lucide-LICENSE (ISC, plus the included Feather MIT notice).

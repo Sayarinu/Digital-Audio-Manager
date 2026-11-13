@@ -1,4 +1,3 @@
-import json
 import os
 import shutil
 import sqlite3
@@ -8,8 +7,8 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "python"))
-import worker  # noqa: E402
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "native" / "src"))
+from dam import engine as worker  # noqa: E402
 
 
 class WorkerTests(unittest.TestCase):
@@ -39,7 +38,7 @@ class WorkerTests(unittest.TestCase):
         bin_dir = self.temp / "data" / "bin"
         bin_dir.mkdir(parents=True)
         for name in ("yt-dlp", "node"):
-            executable = bin_dir / name
+            executable = worker.managed_tool_path(name)
             executable.write_text("#!/bin/sh\nexit 0\n")
             executable.chmod(0o755)
         with patch.object(worker, "download_bytes", side_effect=AssertionError("should not download")):
@@ -174,7 +173,6 @@ class WorkerTests(unittest.TestCase):
 
     def test_sync_preview_counts_playlist_duplicates_and_missing_files(self):
         worker.seed_demo()
-        state = worker.dashboard()
         con = worker.connect()
         try:
             media = self.temp / "library" / "song.mp3"

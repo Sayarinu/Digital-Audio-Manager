@@ -1,84 +1,107 @@
-name: Release desktop builds
+name: Publish native channels
 
 on:
   push:
-    tags: ['v*']
+    branches: [main, experimental]
 
 permissions:
-  contents: write
+  contents: read
+
+concurrency:
+  group: native-release
+  cancel-in-progress: false
 
 jobs:
-  release-macos:
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - target: aarch64-apple-darwin
-          - target: x86_64-apple-darwin
-    runs-on: macos-latest
+  version:
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      version: ${{ steps.choose.outputs.version }}
+      tag: ${{ steps.choose.outputs.tag }}
+      prerelease: ${{ steps.choose.outputs.prerelease }}
     steps:
       - uses: actions/checkout@v4
-      - uses: pnpm/action-setup@v4
         with:
-          version: 10
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 22
-          cache: pnpm
+          fetch-depth: 0
       - uses: actions/setup-python@v5
         with:
-          python-version: '3.12'
-      - name: Install macOS Rust target
-        run: rustup target add ${{ matrix.target }}
-      - run: pnpm install --frozen-lockfile
-      - run: python -m pip install --target python/vendor -r python/requirements.txt
-      - uses: tauri-apps/tauri-action@v1
+          python-version: '3.14'
+      - id: choose
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          tagName: ${{ github.ref_name }}
-          releaseName: Digital Audio Manager ${{ github.ref_name }}
-          releaseBody: Desktop builds for macOS, Windows, and Linux.
-          releaseDraft: false
-          prerelease: false
-          args: --bundles app,dmg --target ${{ matrix.target }}
-
-  release-other-platforms:
+          GH_TOKEN: ${{ github.token }}
+        run: python scripts/release_version.py
+  package:
+    needs: version
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - os: windows-latest
-            bundles: msi,nsis
-          - os: ubuntu-22.04
-            bundles: appimage,deb
+        os: [ubuntu-24.04, windows-latest, macos-latest]
     runs-on: ${{ matrix.os }}
+    env:
+      QT_QPA_PLATFORM: offscreen
+      QT_QUICK_BACKEND: software
     steps:
       - uses: actions/checkout@v4
-      - uses: pnpm/action-setup@v4
-        with:
-          version: 10
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 22
-          cache: pnpm
       - uses: actions/setup-python@v5
         with:
-          python-version: '3.12'
-      - name: Install Linux build dependencies
+          python-version: '3.14'
+      - name: Install Linux Qt runtime libraries
         if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libegl1 libopengl0 libxkbcommon0 libxcb-cursor0 libpulse0
+      - run: python -m pip install uv==0.12.5
+      - run: uv sync --locked --extra test --extra build
+      - run: uv run --no-sync python -m ruff check native/src tests scripts
+      - run: uv run --no-sync python -m pytest -q
+      - run: uv run --no-sync python scripts/check_native.py
+      - name: Stamp the release version
+        run: python scripts/release_version.py --stamp '${{ needs.version.outputs.version }}'
+      - run: uv run --no-sync python -m PyInstaller --noconfirm packaging/desktop.spec
+      - name: Check packaged Linux and Windows app
+        if: runner.os != 'macOS'
+        shell: bash
         run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends libwebkit2gtk-4.1-dev build-essential libssl-dev libgtk-3-dev libayatana-appindicator3-dev librsvg2-dev patchelf libfuse2 file
-      - run: pnpm install --frozen-lockfile
-      - run: python -m pip install --target python/vendor -r python/requirements.txt
-      - uses: tauri-apps/tauri-action@v1
+          if [ "$RUNNER_OS" = Windows ]; then
+            uv run --no-sync python scripts/check_native.py "dist/Digital Audio Manager/Digital Audio Manager.exe"
+          else
+            uv run --no-sync python scripts/check_native.py "dist/Digital Audio Manager/Digital Audio Manager"
+          fi
+      - name: Check packaged macOS app
+        if: runner.os == 'macOS'
+        run: uv run --no-sync python scripts/check_native.py "dist/Digital Audio Manager.app/Contents/MacOS/Digital Audio Manager"
+      - name: Archive and sign the platform build
+        shell: bash
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          DAM_UPDATE_PRIVATE_KEY: ${{ secrets.DAM_UPDATE_PRIVATE_KEY }}
+        run: |
+          package=$(uv run --no-sync python scripts/archive_release.py '${{ needs.version.outputs.version }}')
+          uv run --no-sync python -m dam.updates.package_signature "$package" native/src/dam/assets/update-public-key
+      - uses: actions/upload-artifact@v4
         with:
-          tagName: ${{ github.ref_name }}
-          releaseName: Digital Audio Manager ${{ github.ref_name }}
-          releaseBody: Desktop builds for macOS, Windows, and Linux.
-          releaseDraft: false
-          prerelease: false
-          args: --bundles ${{ matrix.bundles }}
+          name: release-${{ runner.os }}-${{ runner.arch }}
+          path: |
+            Digital-Audio-Manager-*.zip
+            Digital-Audio-Manager-*.zip.sig
+  publish:
+    needs: [version, package]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+      - uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ needs.version.outputs.tag }}
+          target_commitish: ${{ github.sha }}
+          name: Digital Audio Manager ${{ needs.version.outputs.version }}
+          prerelease: ${{ needs.version.outputs.prerelease == 'true' }}
+          make_latest: ${{ needs.version.outputs.prerelease == 'true' && 'false' || 'true' }}
+          files: |
+            artifacts/*.zip
+            artifacts/*.zip.sig
+          fail_on_unmatched_files: true
+          generate_release_notes: true
