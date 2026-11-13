@@ -70,6 +70,7 @@ def main():
     if not engine.rootObjects():
         state.close()
         account.close()
+        lock.unlock()
         return 1
     window = engine.rootObjects()[0]
     window.setWidth(args.width if synthetic else max(920, min(state.settings.value("windowWidth", 1280, type=int), app.primaryScreen().availableGeometry().width())))
@@ -78,6 +79,7 @@ def main():
     def shutdown():
         state.settings.setValue("windowWidth", window.width())
         state.settings.setValue("windowHeight", window.height())
+        state.settings.sync()
         state.close()
         account.close()
 
@@ -89,6 +91,7 @@ def main():
     result = app.exec()
     # Destroy QML bindings before their context objects.
     del engine
+    lock.unlock()
     if temporary:
         temporary.cleanup()
     return result
